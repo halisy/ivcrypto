@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Snapshots you fetch yourself; the committed sample lives in data/sample/
+data/raw/
+
+# Build outputs; the committed sample report lives in reports/sample/
+results/
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/

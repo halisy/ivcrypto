@@ -1,0 +1,62 @@
+[project]
+name = "ivcrypto"
+version = "0.1.0"
+description = "Implied volatility surfaces for Deribit crypto options: IVs, SVI, static arbitrage checks and Heston calibration"
+readme = "README.md"
+authors = [{ name = "halisy" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "pyarrow>=14",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+plotly = ["plotly>=5.18"]
+
+[project.scripts]
+ivcrypto = "ivcrypto.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import sorting
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplifications
+    "C4",   # comprehensions
+    "NPY",  # numpy specific rules
+    "PT",   # pytest style
+    "RUF",  # ruff specific rules
+    "ANN",  # type annotations
+]
+ignore = [
+    "ANN401",  # Any is legitimate for raw JSON payloads
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "-m", "not network"]
+markers = [
+    "network: talks to the live Deribit API (deselected by default; run with -m network)",
+    "slow: numerically heavy test",
+]

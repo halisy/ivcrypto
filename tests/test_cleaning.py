@@ -130,7 +130,8 @@ def test_parity_forwards_on_the_sample(clean_btc):
     # basis points of the futures, and C - P implies a coin discount factor of 1.
     assert forwards["parity_vs_underlying_bps"].abs().max() < 10
     assert forwards["regression_discount"].between(0.999, 1.001).all()
-    assert forwards["parity_dispersion_bps"].max() < 5
+    assert forwards["parity_scatter_bps"].max() < 5
+    assert forwards["parity_se_bps"].max() < 2
 
 
 def test_append_filter_extends_the_log(clean_btc):

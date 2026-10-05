@@ -7,19 +7,27 @@ a call and a put with the same strike K satisfy
     C - P = 1 - K / F,
 
 so every strike quoted on both sides implies a forward F = K / (1 - (C - P)) without a
-model, a spot price or a USD interest rate. A forward that is consistent with the option
-quotes themselves matters: it puts k = ln(K/F) = 0 where calls and puts agree, so the OTM
-put and call wings meet without a jump.
+model, a spot price or a USD interest rate. A forward consistent with the option quotes
+themselves puts k = ln(K/F) = 0 where calls and puts agree, so the OTM put and call wings
+meet without a jump.
 
-Each pair's precision follows from its quotes: an error e in C - P moves the forward by
-F^2 / K * e, and e is bounded by the sum of the two half spreads. The estimate is the
-precision weighted median of the most precise pairs, which a single stale quote cannot
-move. An expiry falls back to Deribit's ``underlying_price`` (the expiry's future) when
-too few pairs exist or they disagree.
+Estimator, per expiry:
 
-A weighted regression of C - P on K over all pairs, C - P = D (1 - K/F), is reported as a
-diagnostic: D is the coin discount factor implied by the quotes, a direct test of the
-zero rate assumption.
+1. Take the ``n`` strikes nearest the money (nearest to Deribit's forward) quoted two sided
+   on both the call and the put. Choosing by distance rather than by precision keeps the
+   set balanced on both sides of the money.
+2. Weight each pair by its precision from the quotes: an error e in C - P moves the forward
+   by F^2 / K * e, and e is at most the sum of the two half spreads.
+3. Drop pairs further than five robust standard deviations from the weighted median (a
+   stale quote), then take the precision weighted mean.
+4. Report the scatter of the pairs around it and the standard error of the mean. On real
+   data the mids scatter far less than the half spreads suggest (about 1 to 3 bps against
+   10 to 30), so the standard error comes from the observed scatter.
+
+An expiry falls back to Deribit's ``underlying_price`` (the expiry's future) when too few
+pairs exist or they scatter too much. A weighted regression of C - P on K over all pairs,
+C - P = D (1 - K/F), is reported as a diagnostic: D is the coin discount factor implied by
+the quotes, a direct test of the zero rate assumption.
 """
 
 from __future__ import annotations
@@ -33,6 +41,10 @@ import pandas as pd
 from ivcrypto.config import CleaningConfig
 
 FloatArray = npt.NDArray[np.float64]
+
+TRIM_ROBUST_SIGMAS = 5.0
+"""Pairs further than this many robust standard deviations from the median are dropped."""
+_MAD_TO_SIGMA = 1.4826
 
 
 def weighted_median(values: npt.ArrayLike, weights: npt.ArrayLike) -> float:
@@ -93,28 +105,47 @@ class ParityEstimate:
     forward: float
     pairs_available: int
     pairs_used: int
-    dispersion_bps: float
+    pairs_trimmed: int
+    scatter_bps: float
+    se_bps: float
     regression_forward: float
     regression_discount: float
 
 
-def parity_forward(pairs: pd.DataFrame, n_pairs: int) -> ParityEstimate:
-    """Precision weighted median forward of the ``n_pairs`` most precise pairs."""
+def parity_forward(pairs: pd.DataFrame, n_pairs: int, reference: float) -> ParityEstimate:
+    """Precision weighted mean forward of the ``n_pairs`` pairs nearest ``reference``."""
     nan = float("nan")
     if pairs.empty:
-        return ParityEstimate(nan, 0, 0, nan, nan, nan)
-    best = pairs.nsmallest(n_pairs, "forward_err")
-    weights = 1.0 / np.maximum(best["forward_err"].to_numpy(), 1e-12) ** 2
-    forward = weighted_median(best["forward"], weights)
-    # Unweighted on purpose: one dominant pair must not make the pairs look unanimous.
-    deviation = np.abs(best["forward"].to_numpy() - forward)
-    dispersion_bps = 1e4 * float(np.median(deviation)) / forward
+        return ParityEstimate(nan, 0, 0, 0, nan, nan, nan, nan)
+    distance = np.abs(np.log(pairs["strike"].to_numpy() / reference))
+    near = pairs.iloc[np.argsort(distance, kind="stable")[:n_pairs]]
+    forwards = near["forward"].to_numpy()
+    weights = 1.0 / np.maximum(near["forward_err"].to_numpy(), 1e-12) ** 2
+
+    median = weighted_median(forwards, weights)
+    robust_sigma = _MAD_TO_SIGMA * float(np.median(np.abs(forwards - median)))
+    tolerance = max(TRIM_ROBUST_SIGMAS * robust_sigma, 1e-4 * median)  # never below 1 bp
+    keep = np.abs(forwards - median) <= tolerance
+    forwards, weights = forwards[keep], weights[keep]
+
+    forward = float(np.sum(weights * forwards) / np.sum(weights))
+    n = forwards.size
+    if n > 1:
+        variance = float(np.sum(weights * (forwards - forward) ** 2) / np.sum(weights))
+        variance *= n / (n - 1)
+        effective_n = float(np.sum(weights) ** 2 / np.sum(weights**2))
+        scatter_bps = 1e4 * np.sqrt(variance) / forward
+        se_bps = scatter_bps / np.sqrt(effective_n)
+    else:
+        scatter_bps = se_bps = nan
     regression_forward, discount = _parity_regression(pairs)
     return ParityEstimate(
         forward=forward,
         pairs_available=len(pairs),
-        pairs_used=len(best),
-        dispersion_bps=dispersion_bps,
+        pairs_used=n,
+        pairs_trimmed=int((~keep).sum()),
+        scatter_bps=scatter_bps,
+        se_bps=se_bps,
         regression_forward=regression_forward,
         regression_discount=discount,
     )
@@ -146,7 +177,9 @@ FORWARD_COLUMNS = [
     "parity_forward",
     "parity_pairs_available",
     "parity_pairs_used",
-    "parity_dispersion_bps",
+    "parity_pairs_trimmed",
+    "parity_scatter_bps",
+    "parity_se_bps",
     "parity_vs_underlying_bps",
     "regression_forward",
     "regression_discount",
@@ -174,13 +207,13 @@ def estimate_forwards(
     rows = []
     for expiry_code, group in quotes.groupby("expiry_code", sort=False):
         underlying = float(group["underlying_price"].median())
-        estimate = parity_forward(parity_pairs(group), config.parity_pairs)
+        estimate = parity_forward(parity_pairs(group), config.parity_pairs, underlying)
         reason = None
         if config.forward_method == "parity":
             if estimate.pairs_used < config.parity_min_pairs:
                 reason = f"only {estimate.pairs_used} usable call/put pairs"
-            elif estimate.dispersion_bps > config.parity_max_dispersion_bps:
-                reason = f"pairs disagree by {estimate.dispersion_bps:.1f} bps"
+            elif estimate.scatter_bps > config.parity_max_scatter_bps:
+                reason = f"pairs scatter by {estimate.scatter_bps:.1f} bps"
         use_parity = config.forward_method == "parity" and reason is None
         underlying_index = group["underlying_index"].iloc[0]
         future = (
@@ -199,7 +232,9 @@ def estimate_forwards(
                 "parity_forward": estimate.forward,
                 "parity_pairs_available": estimate.pairs_available,
                 "parity_pairs_used": estimate.pairs_used,
-                "parity_dispersion_bps": estimate.dispersion_bps,
+                "parity_pairs_trimmed": estimate.pairs_trimmed,
+                "parity_scatter_bps": estimate.scatter_bps,
+                "parity_se_bps": estimate.se_bps,
                 "parity_vs_underlying_bps": 1e4 * (estimate.forward / underlying - 1.0),
                 "regression_forward": estimate.regression_forward,
                 "regression_discount": estimate.regression_discount,

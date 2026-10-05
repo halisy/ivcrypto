@@ -71,29 +71,48 @@ def test_every_pair_recovers_the_forward_from_exact_mids():
     np.testing.assert_allclose(pairs["forward"], F_TRUE, rtol=1e-12)
 
 
-def test_most_precise_pairs_are_near_the_money():
-    estimate = parity_forward(parity_pairs(synthetic_quotes(STRIKES)), n_pairs=6)
+def test_exact_mids_give_the_forward_with_zero_scatter():
+    estimate = parity_forward(parity_pairs(synthetic_quotes(STRIKES)), 8, reference=F_TRUE)
     assert estimate.forward == pytest.approx(F_TRUE, rel=1e-12)
-    assert estimate.pairs_used == 6
-    pairs = parity_pairs(synthetic_quotes(STRIKES)).nsmallest(6, "forward_err")
-    assert np.abs(np.log(pairs["strike"] / F_TRUE)).max() < 0.15
+    assert estimate.pairs_used == 8
+    assert estimate.pairs_trimmed == 0
+    assert estimate.scatter_bps == pytest.approx(0.0, abs=1e-6)
+
+
+def test_pairs_nearest_the_money_are_balanced():
+    pairs = parity_pairs(synthetic_quotes(STRIKES))
+    distance = np.abs(np.log(pairs["strike"] / F_TRUE))
+    chosen = pairs.iloc[np.argsort(distance, kind="stable")[:8]]["strike"]
+    assert (chosen < F_TRUE).sum() >= 3
+    assert (chosen > F_TRUE).sum() >= 3
 
 
 def test_noisy_quotes_stay_within_their_precision():
     pairs = parity_pairs(synthetic_quotes(STRIKES, noise=1.0, seed=3))
-    estimate = parity_forward(pairs, n_pairs=6)
-    best = pairs.nsmallest(6, "forward_err")
-    assert abs(estimate.forward - F_TRUE) <= best["forward_err"].max()
-    assert estimate.dispersion_bps < 20
+    estimate = parity_forward(pairs, 8, reference=F_TRUE)
+    distance = np.abs(np.log(pairs["strike"] / F_TRUE))
+    near = pairs.iloc[np.argsort(distance, kind="stable")[:8]]
+    assert abs(estimate.forward - F_TRUE) <= near["forward_err"].max()
+    assert 0 < estimate.se_bps < estimate.scatter_bps < 25
+
+
+def test_a_stale_quote_is_trimmed():
+    quotes = synthetic_quotes(STRIKES)
+    stale = (quotes["strike"] == 98_000.0) & (quotes["option_type"] == "put")
+    quotes.loc[stale, ["bid_btc", "ask_btc"]] += 0.01  # a put left 1% of a coin too high
+    estimate = parity_forward(parity_pairs(quotes), 8, reference=F_TRUE)
+    assert estimate.pairs_trimmed == 1
+    assert estimate.forward == pytest.approx(F_TRUE, rel=1e-12)
 
 
 def test_regression_recovers_a_nonzero_coin_rate():
     discount = 0.98
-    estimate = parity_forward(parity_pairs(synthetic_quotes(STRIKES, discount=discount)), 6)
+    pairs = parity_pairs(synthetic_quotes(STRIKES, discount=discount))
+    estimate = parity_forward(pairs, 8, reference=F_TRUE)
     assert estimate.regression_discount == pytest.approx(discount, rel=1e-9)
     assert estimate.regression_forward == pytest.approx(F_TRUE, rel=1e-9)
     # Assuming a zero rate biases each pair by about (1 - D)(1 - K/F) / (K/F), which
-    # vanishes at the money: the near the money median stays close to the truth.
+    # vanishes at the money: the estimate from strikes near the money stays close.
     assert abs(estimate.forward / F_TRUE - 1) < 1e-3
 
 
@@ -134,7 +153,7 @@ def test_fallback_when_pairs_disagree():
     quotes["ask_btc"] += shift
     row = estimate_forwards(quotes, None, CleaningConfig()).iloc[0]
     assert row["forward_source"] == "underlying"
-    assert "disagree" in row["fallback_reason"]
+    assert "scatter" in row["fallback_reason"]
 
 
 def test_underlying_method_keeps_parity_as_a_diagnostic():

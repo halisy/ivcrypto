@@ -97,4 +97,5 @@ so the USD forward premium is the BTC price times the forward of that expiry. Ev
   is measurably worse (median +0.017).
 * Converting with the spot index instead of the forward produced errors of up to 80 vol points.
 
-The formal validation lives in M3 (implied volatility).
+The full validation, with distributions by expiry and moneyness, is in
+`src/ivcrypto/validation.py` and summarized in the README.

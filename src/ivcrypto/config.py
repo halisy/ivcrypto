@@ -29,13 +29,13 @@ class CleaningConfig:
     """``parity``: forward implied by put call parity on the option quotes, falling back to
     Deribit's underlying price when too few clean pairs exist. ``underlying``: Deribit's
     ``underlying_price`` (the expiry's future)."""
-    parity_pairs: int = 6
-    """Number of call/put pairs (the most precise ones) combined into the parity forward."""
+    parity_pairs: int = 8
+    """Number of call/put pairs nearest the money combined into the parity forward."""
     parity_min_pairs: int = 2
     """Fewer usable pairs than this triggers the fallback."""
-    parity_max_dispersion_bps: float = 25.0
-    """Fallback when the pairs disagree by more than this (median absolute deviation of
-    the pairs used, in basis points of the forward)."""
+    parity_max_scatter_bps: float = 25.0
+    """Fallback when the pairs scatter by more than this (precision weighted standard
+    deviation of the pair forwards, in basis points of the forward)."""
 
     def __post_init__(self) -> None:
         if self.forward_method not in FORWARD_METHODS:
@@ -44,7 +44,7 @@ class CleaningConfig:
         _require(self.max_relative_spread > 0, "max_relative_spread must be > 0")
         _require(self.parity_pairs >= 1, "parity_pairs must be >= 1")
         _require(self.parity_min_pairs >= 1, "parity_min_pairs must be >= 1")
-        _require(self.parity_max_dispersion_bps > 0, "parity_max_dispersion_bps must be > 0")
+        _require(self.parity_max_scatter_bps > 0, "parity_max_scatter_bps must be > 0")
 
 
 @dataclass(frozen=True)

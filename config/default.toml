@@ -13,10 +13,10 @@ max_relative_spread = 0.5
 # back to Deribit's underlying price when too few clean pairs exist or they disagree.
 # "underlying": Deribit's underlying_price, i.e. the expiry's future.
 forward_method = "parity"
-# Number of call/put pairs (the most precise ones) combined into the parity forward.
-parity_pairs = 6
+# Number of call/put pairs nearest the money combined into the parity forward.
+parity_pairs = 8
 # Fewer usable pairs than this triggers the fallback to the underlying price.
 parity_min_pairs = 2
-# Fallback when the pairs disagree by more than this many basis points of the forward
-# (median absolute deviation of the pairs used).
-parity_max_dispersion_bps = 25.0
+# Fallback when the pairs scatter by more than this many basis points of the forward
+# (precision weighted standard deviation of the pair forwards).
+parity_max_scatter_bps = 25.0

@@ -16,7 +16,7 @@ an honest account of where each model fails.
 | M2 | Cleaning: conversion to USD, forwards, log moneyness, filters | done |
 | M3 | Black 76 and implied volatility, validation against Deribit | done |
 | M4 | SVI per expiry | done |
-| M5 | Static arbitrage checks (SSVI as a stretch goal) | planned |
+| M5 | Static arbitrage checks (SSVI as a stretch goal) | checks done, SSVI next |
 | M6 | Heston pricing, validation and calibration | planned |
 | M7 | CLI, plots, research note | planned |
 
@@ -187,6 +187,38 @@ wing sits exactly on Lee's bound, i.e. the quoted puts alone would extrapolate t
 asymptotic wing than any arbitrage free smile allows. Inside the quoted range that fit is the
 best of all (0.07 vol points RMSE); beyond it, the far left wing is set by the bound, not by
 data.
+
+### Static arbitrage
+
+The fitted smiles are tested on a dense grid (k from -1.5 to 1.5, strikes from 22% to 448% of
+the forward): Durrleman's g(k) >= 0 for butterflies, total variance nondecreasing in maturity at
+fixed k for calendars. The raw coin quotes are tested separately, with no forward and no model:
+calls falling and puts rising with strike, both convex. Each market test runs on mids
+(consistency of the data) and on executable prices, buying at the ask and selling at the bid
+over every pair or triple of strikes (could anyone trade it?). A data level calendar test
+compares mid total variance at matched k across consecutive expiries.
+
+| Check | Prices | BTC tests | BTC violations | ETH tests | ETH violations |
+|---|---|---|---|---|---|
+| butterfly (SVI, per slice) | model | 10 slices | 1, outside the quotes | 10 slices | 0 |
+| calendar (SVI) | model | 9 pairs | 3, outside the quotes | 9 pairs | 0 |
+| call and put monotonicity | mid | 869 | 0 | 727 | 1 |
+| call and put monotonicity | executable | 18,779 | 0 | 12,524 | 0 |
+| call and put convexity | mid | 845 | 84 | 703 | 71 |
+| call and put convexity | executable | 285,785 | 0 | 145,187 | 0 |
+| calendar at matched k | mid, interpolated | 325 | 0 | 261 | 0 |
+
+* **The data contain no tradable static arbitrage.** About one in ten neighbouring triples of
+  mids is not convex, concentrated in deep ITM strikes where spreads are widest (the largest,
+  BTC 24SEP27 puts at 170k, 180k and 190k, misses by 0.005 BTC), but none survives the bid ask
+  spread.
+* **The SVI fits are arbitrage free wherever there are quotes**: g stays positive inside every
+  slice's quoted range and total variance rises between every pair of consecutive expiries over
+  their common quoted range. Outside the quotes, independent per expiry fits can and do break:
+  on BTC, 23OCT26's left wing below k = -0.53 has negative density, and its total variance
+  crosses 30OCT26's in both far wings (k below -0.38 and above 1.08), as does 27NOV26 against
+  25DEC26 far in the left wing. Per slice SVI says nothing about consistency across maturities,
+  which motivates the surface fit below.
 
 ## Development
 

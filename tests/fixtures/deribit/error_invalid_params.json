@@ -1,0 +1,15 @@
+{
+ "jsonrpc": "2.0",
+ "error": {
+  "code": -32602,
+  "data": {
+   "reason": "wrong format",
+   "param": "instrument_name"
+  },
+  "message": "Invalid params"
+ },
+ "testnet": false,
+ "usIn": 1791238637973059,
+ "usOut": 1791238637973139,
+ "usDiff": 80
+}

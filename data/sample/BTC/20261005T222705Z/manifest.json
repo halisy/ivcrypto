@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "ivcrypto_version": "0.1.0",
+  "currency": "BTC",
+  "snapshot_utc": "2026-10-05T22:27:05.007393Z",
+  "snapshot_reference": "server send time (usOut) of the option_book call",
+  "source": "https://www.deribit.com/api/v2",
+  "tables": {
+    "option_instruments": {
+      "file": "option_instruments.parquet",
+      "method": "public/get_instruments",
+      "params": {
+        "currency": "BTC",
+        "kind": "option",
+        "expired": false
+      },
+      "rows": 946,
+      "server_us_in": 1791239217002404,
+      "server_us_out": 1791239217007279,
+      "server_utc_in": "2026-10-05T22:26:57.002404Z",
+      "server_utc_out": "2026-10-05T22:26:57.007279Z",
+      "testnet": false
+    },
+    "option_book": {
+      "file": "option_book.parquet",
+      "method": "public/get_book_summary_by_currency",
+      "params": {
+        "currency": "BTC",
+        "kind": "option"
+      },
+      "rows": 946,
+      "server_us_in": 1791239225007112,
+      "server_us_out": 1791239225007393,
+      "server_utc_in": "2026-10-05T22:27:05.007112Z",
+      "server_utc_out": "2026-10-05T22:27:05.007393Z",
+      "testnet": false
+    },
+    "future_book": {
+      "file": "future_book.parquet",
+      "method": "public/get_book_summary_by_currency",
+      "params": {
+        "currency": "BTC",
+        "kind": "future"
+      },
+      "rows": 13,
+      "server_us_in": 1791239225009006,
+      "server_us_out": 1791239225009566,
+      "server_utc_in": "2026-10-05T22:27:05.009006Z",
+      "server_utc_out": "2026-10-05T22:27:05.009566Z",
+      "testnet": false
+    },
+    "index": {
+      "file": "index.parquet",
+      "method": "public/get_index_price",
+      "params": {
+        "index_name": "btc_usd"
+      },
+      "rows": 1,
+      "server_us_in": 1791239225674155,
+      "server_us_out": 1791239225674360,
+      "server_utc_in": "2026-10-05T22:27:05.674155Z",
+      "server_utc_out": "2026-10-05T22:27:05.674360Z",
+      "testnet": false
+    },
+    "option_tickers": {
+      "file": "option_tickers.parquet",
+      "method": "public/ticker",
+      "params": {
+        "instrument_name": "each of the 946 options in option_book"
+      },
+      "rows": 946,
+      "server_us_in": 1791239225918762,
+      "server_us_out": 1791239471416191,
+      "server_utc_in": "2026-10-05T22:27:05.918762Z",
+      "server_utc_out": "2026-10-05T22:31:11.416191Z",
+      "testnet": false
+    }
+  },
+  "notes": {
+    "tickers_skipped": []
+  }
+}

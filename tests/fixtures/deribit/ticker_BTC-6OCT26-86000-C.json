@@ -1,0 +1,44 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "timestamp": 1791238635089,
+  "state": "open",
+  "stats": {
+   "high": 0.011,
+   "low": 0.001,
+   "price_change": -80.0,
+   "volume": 118.4,
+   "volume_usd": 36164.37
+  },
+  "greeks": {
+   "delta": 0.47233,
+   "gamma": 0.00067,
+   "vega": 11.39328,
+   "theta": -119.08755,
+   "rho": 0.44793
+  },
+  "index_price": 85952.96,
+  "instrument_name": "BTC-6OCT26-86000-C",
+  "last_price": 0.0022,
+  "settlement_price": 0.00851448,
+  "min_price": 0.0001,
+  "max_price": 0.033,
+  "open_interest": 101.9,
+  "mark_price": 0.0025,
+  "interest_rate": 0.0,
+  "estimated_delivery_price": 85952.96,
+  "best_ask_price": 0.0028,
+  "best_bid_price": 0.0023,
+  "mark_iv": 20.9,
+  "bid_iv": 19.16,
+  "ask_iv": 22.93,
+  "underlying_price": 85956.37,
+  "underlying_index": "BTC-6OCT26",
+  "best_ask_amount": 51.5,
+  "best_bid_amount": 8.2
+ },
+ "usIn": 1791238635724142,
+ "usOut": 1791238635724354,
+ "usDiff": 212,
+ "testnet": false
+}

@@ -16,7 +16,7 @@ an honest account of where each model fails.
 | M2 | Cleaning: conversion to USD, forwards, log moneyness, filters | done |
 | M3 | Black 76 and implied volatility, validation against Deribit | done |
 | M4 | SVI per expiry | done |
-| M5 | Static arbitrage checks (SSVI as a stretch goal) | checks done, SSVI next |
+| M5 | Static arbitrage checks, plus SSVI (stretch goal) | done |
 | M6 | Heston pricing, validation and calibration | planned |
 | M7 | CLI, plots, research note | planned |
 
@@ -219,6 +219,46 @@ compares mid total variance at matched k across consecutive expiries.
   crosses 30OCT26's in both far wings (k below -0.38 and above 1.08), as does 27NOV26 against
   25DEC26 far in the left wing. Per slice SVI says nothing about consistency across maturities,
   which motivates the surface fit below.
+
+### SSVI across expiries (stretch goal)
+
+SSVI (Gatheral and Jacquier 2014) describes the whole surface with the ATM total variance theta
+of each expiry and three global parameters, w(k, theta) = theta/2 (1 + rho phi k +
+sqrt((phi k + rho)^2 + 1 - rho^2)) with the power law phi(theta) = eta / (theta^gamma
+(1 + theta)^(1 - gamma)). Their sufficient conditions are imposed as bounds: eta(1 + |rho|) <= 2
+and 0 < gamma <= 1/2 (no butterfly arbitrage), theta nondecreasing in maturity (no calendar
+arbitrage). Every SSVI slice is a raw SVI slice, so the checker above verifies the result
+independently rather than trusting the theorem, including at maturities between expiries, where
+theta is interpolated linearly in time.
+
+* **Arbitrage free everywhere, verified**: zero butterfly or calendar violations on both samples
+  over k from -1.5 to 1.5 at the 10 expiries and 120 maturities in between (smallest g: 0.25).
+  Breaking eta(1 + |rho|) <= 2 in a test does produce butterflies the checker finds.
+* **At a large cost in fit**: over all BTC quotes the RMSE rises from 0.23 vol points (SVI per
+  expiry) to 2.1, and only 34% of fitted vols lie inside the bid ask band instead of 98% (ETH:
+  2.6 vol points, 38%). The same holds under every weighting (RMSE 2.0 to 2.7). Two rigidities
+  explain it: one rho for all maturities, where per expiry fits want anything from -0.09 to
+  -0.58, and the curvature exponent gamma, which sits on its bound of 1/2 under every weighting:
+  the short dated smiles curve more than this arbitrage free family can.
+
+| BTC expiry | Days | SVI RMSE | SSVI RMSE | SVI inside band | SSVI inside band |
+|---|---|---|---|---|---|
+| 8OCT26 | 2.4 | 0.27 | 2.34 | 100% | 10% |
+| 9OCT26 | 3.4 | 0.34 | 2.12 | 95% | 16% |
+| 16OCT26 | 10.4 | 0.23 | 1.79 | 100% | 16% |
+| 23OCT26 | 17.4 | 0.15 | 1.15 | 100% | 22% |
+| 30OCT26 | 24.4 | 0.37 | 2.74 | 94% | 37% |
+| 27NOV26 | 52.4 | 0.17 | 0.92 | 98% | 40% |
+| 25DEC26 | 80.4 | 0.28 | 4.16 | 96% | 31% |
+| 26MAR27 | 171.4 | 0.16 | 1.16 | 100% | 37% |
+| 25JUN27 | 262.4 | 0.11 | 0.82 | 100% | 43% |
+| 24SEP27 | 353.4 | 0.07 | 0.45 | 100% | 46% |
+
+The practical reading: per expiry SVI is the better description of the quoted smiles and is
+arbitrage free where quotes exist; SSVI is the safe interpolator and extrapolator. A natural
+next step is extended SSVI with a maturity dependent rho (Hendriks and Martini 2019), or SVI
+slices fitted with a penalty on calendar and butterfly violations started from the SSVI fit, as
+Gatheral and Jacquier suggest.
 
 ## Development
 

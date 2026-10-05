@@ -43,6 +43,7 @@ import pandas as pd
 from ivcrypto.cleaning import CleanQuotes
 from ivcrypto.svi.fit import SVISurface
 from ivcrypto.svi.raw import SVIParams
+from ivcrypto.svi.ssvi import SSVIFit
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -88,6 +89,20 @@ def slices_from_svi(surface: SVISurface) -> list[Slice]:
         )
         for fit in surface.fits.values()
     ]
+
+
+def slices_from_ssvi(fit: SSVIFit, extra_maturities: npt.ArrayLike = ()) -> list[Slice]:
+    """SSVI slices at the fitted expiries, plus any maturities in between (no quotes there,
+    so their violations would count as outside the quoted range)."""
+    ranges = fit.residuals.groupby("expiry_code")["k"].agg(["min", "max"])
+    slices = [
+        Slice(code, float(T), fit.slice_params(float(T)), *ranges.loc[code].to_numpy(dtype=float))
+        for code, T in zip(fit.expiries, fit.T, strict=True)
+    ]
+    for T in np.asarray(extra_maturities, dtype=float):
+        name = f"{T * 365.0:.2f} days"
+        slices.append(Slice(name, float(T), fit.slice_params(float(T)), np.inf, -np.inf))
+    return sorted(slices, key=lambda s: s.T)
 
 
 def durrleman_g(params: SVIParams, k: npt.ArrayLike) -> FloatArray:

@@ -20,3 +20,17 @@ parity_min_pairs = 2
 # Fallback when the pairs scatter by more than this many basis points of the forward
 # (precision weighted standard deviation of the pair forwards).
 parity_max_scatter_bps = 25.0
+
+[svi]
+# Residual weights for the per expiry raw SVI fits: "spread" divides total variance errors
+# by each quote's bid ask width (targets the inside the band measure), "vega" turns them
+# into first order price errors, "uniform" leaves them as they are.
+weighting = "spread"
+# Best points of the quasi explicit (m, sigma) grid used as starting points, plus one
+# heuristic start.
+n_starts = 8
+# Grid sizes: m over the quoted log moneyness range, sigma geometric from 0.001 to 2.
+grid_m = 21
+grid_sigma = 20
+# Expiries with fewer quotes are not fitted (SVI has five parameters).
+min_quotes = 6

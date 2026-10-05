@@ -47,12 +47,39 @@ class CleaningConfig:
         _require(self.parity_max_scatter_bps > 0, "parity_max_scatter_bps must be > 0")
 
 
+SVI_WEIGHTINGS = ("spread", "vega", "uniform")
+
+
+@dataclass(frozen=True)
+class SVIConfig:
+    """Per expiry raw SVI fits (see ``svi/fit.py``)."""
+
+    weighting: str = "spread"
+    """Residual weights: ``spread`` (inverse bid ask width), ``vega`` or ``uniform``."""
+    n_starts: int = 8
+    """Best points of the quasi explicit grid used as starts (plus one heuristic start)."""
+    grid_m: int = 21
+    """Grid size for m, spread over the quoted log moneyness range."""
+    grid_sigma: int = 20
+    """Grid size for sigma, geometric between 0.001 and 2."""
+    min_quotes: int = 6
+    """Expiries with fewer quotes are not fitted (SVI has five parameters)."""
+
+    def __post_init__(self) -> None:
+        if self.weighting not in SVI_WEIGHTINGS:
+            raise ValueError(f"weighting must be one of {SVI_WEIGHTINGS}")
+        _require(self.n_starts >= 1, "n_starts must be >= 1")
+        _require(self.grid_m >= 2 and self.grid_sigma >= 2, "grids need at least 2 points")
+        _require(self.min_quotes >= 5, "min_quotes must be >= 5 (SVI has five parameters)")
+
+
 @dataclass(frozen=True)
 class Config:
     cleaning: CleaningConfig = field(default_factory=CleaningConfig)
+    svi: SVIConfig = field(default_factory=SVIConfig)
 
 
-SECTIONS: Mapping[str, type] = {"cleaning": CleaningConfig}
+SECTIONS: Mapping[str, type] = {"cleaning": CleaningConfig, "svi": SVIConfig}
 
 
 def load_config(path: Path | str | None = None) -> Config:

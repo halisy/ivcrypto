@@ -15,7 +15,7 @@ an honest account of where each model fails.
 | M1 | Deribit data layer, Parquet snapshots, committed samples | done |
 | M2 | Cleaning: conversion to USD, forwards, log moneyness, filters | done |
 | M3 | Black 76 and implied volatility, validation against Deribit | done |
-| M4 | SVI per expiry | planned |
+| M4 | SVI per expiry | done |
 | M5 | Static arbitrage checks (SSVI as a stretch goal) | planned |
 | M6 | Heston pricing, validation and calibration | planned |
 | M7 | CLI, plots, research note | planned |
@@ -134,6 +134,59 @@ reports 0 and we return NaN. The residual disagreements have identified causes:
   for fitting.
 * Six marks of at most 1.5e-6 BTC cannot be inverted meaningfully: rounding to 8 decimals
   alone moves their IV by more than 0.01 vol points. They are reported separately, not hidden.
+
+### SVI per expiry
+
+* **Parameterization and constraints.** Raw SVI in total variance, w(k) = a + b(rho(k - m) +
+  sqrt((k - m)^2 + sigma^2)), fitted to the OTM mid IVs of each expiry separately. The optimizer
+  works in the two asymptotic wing slopes s_L = b(1 - rho), s_R = b(1 + rho), the minimum total
+  variance v, m and sigma, so every constraint is a plain bound: slopes in [1e-6, 2] give b > 0,
+  |rho| < 1 and Roger Lee's wing bound b(1 + |rho|) <= 2 (a necessary condition for no
+  arbitrage, so it excludes nothing legitimate); v >= 0 is the nonnegative minimum variance;
+  sigma >= 1e-4. A first version bounded b by 2 / (1 + |rho|) directly; a deliberately hard
+  test (a symmetric smile with wings steeper than the bound) showed the solver stalling on the
+  kink of |rho| at rho = 0, which the slope parameterization removes.
+* **Starting points.** For fixed (m, sigma), SVI is linear in the other three parameters (De
+  Marco and Martini's quasi explicit reduction), so a 21 by 20 grid over (m, sigma) costs one
+  small linear least squares per point. The eight best grid points and one heuristic start seed
+  a bounded least squares fit (trust region reflective), and the best result is polished with an
+  active set method that lands exactly on any binding bound. On both samples all nine starts end
+  within 0.01% of the same cost on every expiry, so the fits are not initialization accidents.
+* **Weights.** Residuals are divided by each quote's bid ask width in total variance by default,
+  which targets the quality measure we care about (fitted vols inside the market's band) and
+  trusts quotes in proportion to how tightly they are made. Over all fitted quotes:
+
+  | Weighting | BTC RMSE | BTC inside band | ETH RMSE | ETH inside band | Worst slice inside band |
+  |---|---|---|---|---|---|
+  | inverse spread (default) | 0.23 | 98.1% | 0.27 | 99.0% | 94% |
+  | uniform in total variance | 0.20 | 96.8% | 0.23 | 97.1% | 87% |
+  | vega | 0.38 | 95.4% | 0.43 | 96.1% | 82% |
+
+  RMSE is in vol points. Uniform weights give the smallest average error, inverse spread weights
+  put the most fitted vols inside the market; vega weights neglect the low vega wings, where
+  their errors reach 3.7 vol points.
+
+Per expiry on the BTC sample (inverse spread weights):
+
+| Expiry | Days | Quotes | ATM vol | rho | RMSE (vol pts) | Max error | Inside band |
+|---|---|---|---|---|---|---|---|
+| 8OCT26 | 2.4 | 20 | 29.1% | -0.23 | 0.27 | 0.55 | 100% |
+| 9OCT26 | 3.4 | 19 | 31.2% | -0.31 | 0.34 | 1.03 | 95% |
+| 16OCT26 | 10.4 | 19 | 32.2% | -0.39 | 0.23 | 0.51 | 100% |
+| 23OCT26 | 17.4 | 23 | 32.5% | -0.34 | 0.15 | 0.30 | 100% |
+| 30OCT26 | 24.4 | 49 | 33.5% | -0.09 | 0.37 | 1.73 | 94% |
+| 27NOV26 | 52.4 | 48 | 35.7% | -0.37 | 0.17 | 0.62 | 98% |
+| 25DEC26 | 80.4 | 48 | 36.4% | -0.29 | 0.28 | 1.02 | 96% |
+| 26MAR27 | 171.4 | 52 | 37.3% | -0.25 | 0.16 | 0.60 | 100% |
+| 25JUN27 | 262.4 | 54 | 38.4% | -0.25 | 0.11 | 0.45 | 100% |
+| 24SEP27 | 353.4 | 41 | 38.9% | -0.58 | 0.07 | 0.34 | 100% |
+
+The term structure is upward sloping (29% at 2 days to 39% at a year) with a put skew at every
+maturity. One fit leans on a constraint: on the one year expiry (BTC and ETH alike) the left
+wing sits exactly on Lee's bound, i.e. the quoted puts alone would extrapolate to a steeper
+asymptotic wing than any arbitrage free smile allows. Inside the quoted range that fit is the
+best of all (0.07 vol points RMSE); beyond it, the far left wing is set by the bound, not by
+data.
 
 ## Development
 

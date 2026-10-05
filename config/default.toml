@@ -1,0 +1,22 @@
+# Every threshold and modeling switch, with its default value.
+#
+# Copy this file, change what you need and pass it with --config. Keys you leave out keep
+# their defaults; unknown keys are rejected so a typo cannot go unnoticed. A test checks
+# that this file matches the defaults in src/ivcrypto/config.py.
+
+[cleaning]
+# Expiries closer than this many calendar days are dropped.
+min_days_to_expiry = 2.0
+# Quotes whose (ask - bid) / mid exceeds this are dropped.
+max_relative_spread = 0.5
+# "parity": forward implied by put call parity on the option quotes themselves, falling
+# back to Deribit's underlying price when too few clean pairs exist or they disagree.
+# "underlying": Deribit's underlying_price, i.e. the expiry's future.
+forward_method = "parity"
+# Number of call/put pairs (the most precise ones) combined into the parity forward.
+parity_pairs = 6
+# Fewer usable pairs than this triggers the fallback to the underlying price.
+parity_min_pairs = 2
+# Fallback when the pairs disagree by more than this many basis points of the forward
+# (median absolute deviation of the pairs used).
+parity_max_dispersion_bps = 25.0

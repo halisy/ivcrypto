@@ -34,3 +34,14 @@ grid_m = 21
 grid_sigma = 20
 # Expiries with fewer quotes are not fitted (SVI has five parameters).
 min_quotes = 6
+
+[heston]
+# "iv": vega weighted price errors, (model - mid) / vega, i.e. IV errors to first order.
+# "spread": the same errors divided by each quote's bid ask IV width, as for SVI.
+weighting = "iv"
+# Give every expiry the same total weight instead of every quote.
+equal_expiry_weights = true
+# Starting points (the best of a fixed grid by initial cost) refined by least squares.
+n_starts = 4
+# Function evaluation budget per start.
+max_evaluations = 400

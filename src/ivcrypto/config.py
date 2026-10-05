@@ -73,13 +73,42 @@ class SVIConfig:
         _require(self.min_quotes >= 5, "min_quotes must be >= 5 (SVI has five parameters)")
 
 
+HESTON_WEIGHTINGS = ("iv", "spread")
+
+
+@dataclass(frozen=True)
+class HestonConfig:
+    """Heston calibration (see ``heston/calibrate.py``)."""
+
+    weighting: str = "iv"
+    """``iv``: vega weighted price errors, i.e. IV errors to first order. ``spread``: those
+    errors divided by each quote's bid ask IV width, as for SVI."""
+    equal_expiry_weights: bool = True
+    """Give every expiry the same total weight instead of every quote."""
+    n_starts: int = 4
+    """Starting points (best of a fixed grid by initial cost) refined by least squares."""
+    max_evaluations: int = 400
+    """Function evaluation budget per start."""
+
+    def __post_init__(self) -> None:
+        if self.weighting not in HESTON_WEIGHTINGS:
+            raise ValueError(f"weighting must be one of {HESTON_WEIGHTINGS}")
+        _require(self.n_starts >= 1, "n_starts must be >= 1")
+        _require(self.max_evaluations >= 10, "max_evaluations must be >= 10")
+
+
 @dataclass(frozen=True)
 class Config:
     cleaning: CleaningConfig = field(default_factory=CleaningConfig)
     svi: SVIConfig = field(default_factory=SVIConfig)
+    heston: HestonConfig = field(default_factory=HestonConfig)
 
 
-SECTIONS: Mapping[str, type] = {"cleaning": CleaningConfig, "svi": SVIConfig}
+SECTIONS: Mapping[str, type] = {
+    "cleaning": CleaningConfig,
+    "svi": SVIConfig,
+    "heston": HestonConfig,
+}
 
 
 def load_config(path: Path | str | None = None) -> Config:

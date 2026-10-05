@@ -17,7 +17,7 @@ an honest account of where each model fails.
 | M3 | Black 76 and implied volatility, validation against Deribit | done |
 | M4 | SVI per expiry | done |
 | M5 | Static arbitrage checks, plus SSVI (stretch goal) | done |
-| M6 | Heston pricing, validation and calibration | planned |
+| M6 | Heston pricing, validation and calibration, comparison with SVI | done |
 | M7 | CLI, plots, research note | planned |
 
 ## Data
@@ -259,6 +259,107 @@ arbitrage free where quotes exist; SSVI is the safe interpolator and extrapolato
 next step is extended SSVI with a maturity dependent rho (Hendriks and Martini 2019), or SVI
 slices fitted with a penalty on calendar and butterfly violations started from the SSVI fit, as
 Gatheral and Jacquier suggest.
+
+### Heston
+
+**Pricer.** European prices come from Lewis's single integral on the forward,
+C = F - sqrt(FK)/pi * integral of Re[e^{iu ln(F/K)} phi(u - i/2)] / (u^2 + 1/4) du, with the "little
+trap" characteristic function of Albrecher et al. (2007), which keeps the complex logarithm on its
+principal branch at long maturities. Lewis over Carr Madan FFT: no damping parameter to tune and
+no strike grid to interpolate onto Deribit's irregular strikes. Lewis over COS: COS is faster,
+but its accuracy rests on a truncation interval from cumulants that is delicate for two day
+maturities at high volatility, and speed is not the bottleneck (about 1 ms per maturity). The
+characteristic function depends only on maturity, so it is evaluated once per maturity and every
+strike costs one matrix product. The integral uses composite Gauss Legendre quadrature up to a
+limit read off the decay of the characteristic function (up to about 250 for two day options with
+a vol of vol of 3).
+
+Three numerical details came out of testing, not theory:
+
+* Panels must be narrow near the origin: the factor 1/(u^2 + 1/4) has poles at u = +-i/2, and
+  panels 2 wide there left errors of 1e-10 (relative to F) instead of 1e-15.
+* The textbook little trap formula divides beta - d by xi^2, which cancels catastrophically as
+  xi -> 0; the exact rewrite beta - d = -xi^2 (iu + u^2) / (beta + d) removes it.
+* numpy's complex `log1p` is computed as log(1 + z) and loses all relative accuracy for tiny z
+  (4e-5 relative error at |z| = 2e-12 with numpy 2.4), so a short series is used there. Without
+  it, the Black 76 limit stalled at an error of 7e-6 of F.
+
+**Validation.**
+
+| Test | Result |
+|---|---|
+| Lewis (2000) reference calls, K = 80 to 120 | maximum error 1.4e-12 |
+| Fang and Oosterlee (2008) test case (Feller violated) | 5.785155434, against their published 5.785155450; a 30 digit evaluation gives 5.785155434376, so their reference is good to 2e-8 and ours to 3e-13 |
+| Fast quadrature against adaptive quadrature, 2 days to 3 years, vol of vol 3, strikes to 3 standard deviations | largest difference 2e-13 of F |
+| Black 76 limit: xi -> 0 with v0 = theta | error falls linearly in xi: 7.4e-4, 7.4e-6, 7.4e-8 of F at xi = 1e-2, 1e-4, 1e-6 |
+| Monte Carlo, Andersen's QE scheme with martingale correction, 100,000 paths | every price within 4 standard errors (largest z = 1.85 over 36 prices), including Feller violating parameters; the simulated forward is a martingale |
+| Calibration on quotes priced by Heston itself | parameters recovered to 1e-4 |
+
+**Calibration.** Least squares (trust region reflective) on vega weighted price errors,
+(model - mid) / vega, which are IV errors to first order without a root search inside the
+optimizer; every expiry gets equal total weight so that the 50 strike expiries do not drown the
+20 strike ones; bounds v0, theta in [1e-4, 4], kappa in [1e-3, 50], xi in [1e-2, 10],
+rho in [-0.99, 0.99]; the best four of eight starting points refined, all four ending at the same
+cost. Reported errors are exact IV errors after inverting the model prices. The Feller condition
+is reported, not imposed.
+
+On the BTC sample: v0 = 0.105 (32% vol), theta = 0.185 (43%), kappa = 15.3, xi = 4.96,
+rho = -0.11. The Feller ratio 2 kappa theta / xi^2 is 0.23: the condition fails badly, and the
+calibration needs a vol of vol near 5 with mean reversion fast enough (half life 16 days) to stop
+that vol of vol from flattening the long end.
+
+**Where and how much Heston fails.** Scored on the same 373 quotes (RMSE in vol points, share of
+fitted IVs inside the bid ask band):
+
+| Quotes | n | SVI | Heston, one parameter set | Heston refit per expiry | SVI inside band | Heston inside band |
+|---|---|---|---|---|---|---|
+| all | 373 | 0.23 | 2.01 | 1.26 | 98% | 20% |
+| under 7 days | 39 | 0.31 | 2.74 | 1.23 | 97% | 18% |
+| 7 to 30 days | 91 | 0.30 | 1.86 | 1.13 | 97% | 21% |
+| 30 to 90 days | 96 | 0.23 | 2.65 | 1.89 | 97% | 24% |
+| over 90 days | 147 | 0.13 | 1.23 | 0.70 | 100% | 18% |
+| k below -0.2 (far puts) | 82 | 0.33 | 3.21 | 2.20 | 98% | 31% |
+| k from -0.05 to 0.05 (at the money) | 85 | 0.16 | 1.85 | 0.83 | 100% | 8% |
+| k above 0.2 (far calls) | 65 | 0.18 | 1.14 | 0.44 | 97% | 23% |
+
+* **The short end.** In Heston the ATM skew and curvature tend to constants as T -> 0 (the skew to
+  rho xi / (4 sqrt(v0)) = -0.41 here), while jumps make them explode. The market's ATM curvature
+  d2sigma/dk2 scales like T^(-1.07) across all ten expiries (81 at 2.4 days, 0.34 at a year),
+  close to the 1/T scaling of a jump component. Heston's flattens: from 3.4 to 2.4 days the
+  market's curvature rises 66% (48.7 to 80.9), Heston's 4% (63.9 to 66.5). The single parameter
+  set compromises: too little curvature at 2 to 3 days and two to three times too much between 10
+  and 50 days (39.6 against 12.3 at 10 days), which spreads its errors over all maturities. At
+  the very short end even the sign of the smile's tilt is wrong: the market's 2 to 10 day smiles
+  slope upward at the money (their bottom sits just below the forward, an ATM skew of +0.84 at
+  2.4 days), while Heston's ATM skew is negative at every maturity.
+* **The deep put wing.** The largest errors are far OTM puts. The worst quote overall is the
+  25DEC26 put at strike 30k (k = -1.06): market 90.9% against 75.1% for the calibrated Heston, 15.8
+  vol points, and still 79.3% (11.6 vol points short) when Heston is fitted to that expiry alone.
+  Crash protection is priced well beyond what a diffusion's tails allow.
+* **Refitting each expiry separately does not rescue it.** Each smile alone still misses by 0.2 to
+  2.5 vol points, and the parameters it needs are implausible and unstable: vol of vol at the cap
+  of 10 on three expiries, mean reversion at the cap of 50 on four, v0 ranging from 0.015 to 0.53
+  and quadrupling between neighbouring expiries (0.115 at 24 days, 0.481 at 52). Lifting the caps (xi up to 40, kappa up to 500) sends the 2 and 3
+  day fits to xi = 21 and 26 with kappa at the new cap, for an RMSE improvement of 0.07 and 0.17
+  vol points. The failure is structural, not a matter of bounds or optimizer.
+
+| Expiry | Days | v0 | kappa | theta | xi | rho | Feller ratio | RMSE |
+|---|---|---|---|---|---|---|---|---|
+| 8OCT26 | 2.4 | 0.015 | 7.1 | 3.89 | 10.0 | +0.10 | 0.55 | 0.86 |
+| 9OCT26 | 3.4 | 0.021 | 11.7 | 1.91 | 10.0 | +0.05 | 0.45 | 1.53 |
+| 16OCT26 | 10.4 | 0.017 | 50.0 | 0.24 | 6.1 | 0.00 | 0.65 | 0.67 |
+| 23OCT26 | 17.4 | 0.055 | 50.0 | 0.17 | 6.9 | -0.07 | 0.36 | 0.74 |
+| 30OCT26 | 24.4 | 0.115 | 50.0 | 0.15 | 9.3 | -0.13 | 0.17 | 1.39 |
+| 27NOV26 | 52.4 | 0.481 | 50.0 | 0.10 | 9.0 | -0.14 | 0.13 | 0.81 |
+| 25DEC26 | 80.4 | 0.534 | 36.1 | 0.11 | 10.0 | -0.18 | 0.08 | 2.55 |
+| 26MAR27 | 171.4 | 0.236 | 24.5 | 0.17 | 8.6 | -0.15 | 0.11 | 0.89 |
+| 25JUN27 | 262.4 | 0.271 | 16.2 | 0.17 | 6.6 | -0.13 | 0.13 | 0.74 |
+| 24SEP27 | 353.4 | 0.128 | 9.7 | 0.19 | 4.1 | -0.10 | 0.22 | 0.17 |
+
+The pattern (curvature that explodes like 1/T, fat left tails, parameters that run to their
+bounds) is what a jump component explains. Bates (Heston plus lognormal jumps) adds three
+parameters and keeps a closed form characteristic function, so it slots into the same Lewis
+pricer; it is the obvious next model to test against these findings.
 
 ## Development
 

@@ -92,9 +92,10 @@ so the USD forward premium is the BTC price times the forward of that expiry. Ev
 
 * Inverting the ticker's `best_bid_price` and `best_ask_price` this way reproduces Deribit's
   `bid_iv` and `ask_iv` to the two decimals reported.
-* Inverting `mark_price` for OTM options reproduces `mark_iv` with a median error of +0.0025 vol
-  points (5th to 95th percentile about ±0.06) using ACT/365 from `creation_timestamp`. ACT/365.25
-  is measurably worse (median +0.017).
+* Inverting `mark_price` for OTM options reproduces `mark_iv` with a median error of -0.0008 vol
+  points (5th to 95th percentile -0.023 to +0.022, 458 BTC marks large enough to resolve) using
+  ACT/365 from `creation_timestamp`. ACT/365.25 is measurably worse (median +0.014 on BTC,
+  +0.019 on ETH).
 * Converting with the spot index instead of the forward produced errors of up to 80 vol points.
 
 The full validation, with distributions by expiry and moneyness, is in

@@ -5,8 +5,9 @@ mid IV (vol points), largest error, and the share of fitted IVs inside the bid a
 breakdown by maturity and moneyness shows where a model fails, not only how much.
 
 The ATM term structure is the sharpest test of Heston for short dated crypto options. In
-Heston the ATM skew dsigma/dk and curvature d2sigma/dk2 tend to constants as T -> 0 (the skew
-to rho xi / (4 sqrt(v0))), whereas jumps make them explode as T shrinks. The market values
+Heston the ATM skew dsigma/dk and curvature d2sigma/dk2 tend to finite limits as T -> 0 (the
+skew to rho xi / (4 sqrt(v0))), whereas with jumps the curvature grows without bound, like
+T^(-1/2) in a jump diffusion (``tests/test_asymptotics.py`` checks both). The market values
 are read off the SVI slices,
 
     sigma'(0) = w' / (2 sqrt(w T)),    sigma''(0) = w'' / (2 sqrt(w T)) - w'^2 / (4 w^1.5 sqrt(T)),

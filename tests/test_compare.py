@@ -56,7 +56,7 @@ def test_market_curvature_explodes_while_heston_flattens(models):
     _, svi, heston, _ = models
     ts = atm_term_structure(svi, heston.params)
     _, alpha_market = power_law(ts["T"], ts["market_atm_curvature"])
-    assert 0.9 < alpha_market < 1.25  # close to the 1/T scaling that jumps produce
+    assert 0.9 < alpha_market < 1.25  # about 1/T from 2.4 days to a year
     first, second = ts.iloc[0], ts.iloc[1]
     market_ratio = first["market_atm_curvature"] / second["market_atm_curvature"]
     heston_ratio = first["heston_atm_curvature"] / second["heston_atm_curvature"]

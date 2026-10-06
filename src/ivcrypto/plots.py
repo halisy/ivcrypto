@@ -351,7 +351,7 @@ def surface_html(results: Results, theme: Theme, out: Path) -> Path | None:
         },
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(out, include_plotlyjs="cdn")
+    fig.write_html(out, include_plotlyjs="cdn", div_id="ivcrypto_surface")  # stable output
     return out
 
 

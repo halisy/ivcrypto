@@ -79,8 +79,8 @@ def _add_build(commands: argparse._SubParsersAction) -> None:
         "build",
         help="run the full analysis of one snapshot and write the results",
         description="Clean the quotes, compute IVs, validate them against Deribit, fit SVI and "
-        "SSVI, check static arbitrage, calibrate Heston and compare the models. Results go to "
-        "OUT/CURRENCY/SNAPSHOT_ID/.",
+        "SSVI, check static arbitrage, calibrate Heston and Bates and compare the models. "
+        "Results go to OUT/CURRENCY/SNAPSHOT_ID/.",
     )
     build.add_argument("snapshot", type=Path, help="snapshot directory, e.g. data/sample/BTC/...")
     build.add_argument(
@@ -92,7 +92,12 @@ def _add_build(commands: argparse._SubParsersAction) -> None:
     build.add_argument(
         "--no-heston-per-expiry",
         action="store_true",
-        help="skip the per expiry Heston refits (the slowest diagnostic)",
+        help="skip the per expiry Heston refits (a diagnostic)",
+    )
+    build.add_argument(
+        "--no-bates-variants",
+        action="store_true",
+        help="skip the Bates refits under other jump bounds (the slowest diagnostic)",
     )
     build.set_defaults(handler=_cmd_build)
 
@@ -139,6 +144,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         load_config(args.config),
         args.out,
         per_expiry_heston=not args.no_heston_per_expiry,
+        bates_variants=not args.no_bates_variants,
     )
     print(path)
     return 0

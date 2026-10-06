@@ -9,9 +9,8 @@ import pytest
 
 from ivcrypto import black76
 from ivcrypto.heston import HestonParams, characteristic_function, mc_price, price, price_quad
-from ivcrypto.heston.calibrate import ExpiryQuotes, calibrate_heston
+from ivcrypto.heston.calibrate import calibrate_heston
 from ivcrypto.heston.charfunc import complex_log1p
-from ivcrypto.implied_vol import implied_vols
 
 # Lewis (2000), "Option Valuation under Stochastic Volatility": S = 100, r = 1%, q = 2%,
 # T = 1, v0 = 0.04, kappa = 4, theta = 0.25, xi = 1, rho = -0.5. A 30 digit evaluation of the
@@ -129,35 +128,7 @@ def test_monte_carlo_agrees_with_the_fourier_pricer(params, F, T):
     assert abs(mc.forward_mean - F) < 4.0 * mc.forward_std_error  # the forward is a martingale
 
 
-def synthetic_quotes(params, maturities, F=86_000.0):
-    """Quotes priced by Heston itself, with a 1 vol point band, for a recovery test."""
-    quotes = []
-    for T in maturities:
-        k = np.linspace(-2.5, 2.0, 15) * np.sqrt(params.theta * T)
-        strikes = F * np.exp(k)
-        calls = k >= 0
-        mid = price(F, strikes, T, params, calls)
-        iv = implied_vols(mid, F, strikes, T, calls)
-        quotes.append(
-            ExpiryQuotes(
-                expiry_code=f"T{T:.3f}",
-                T=T,
-                F=F,
-                instrument_name=np.array([f"q{i}" for i in range(k.size)], dtype=object),
-                K=strikes,
-                k=k,
-                is_call=calls,
-                mid=mid,
-                iv_bid=iv - 0.005,
-                iv_mid=iv,
-                iv_ask=iv + 0.005,
-                vega=black76.vega(F, strikes, T, iv),
-            )
-        )
-    return quotes
-
-
-def test_calibration_recovers_known_parameters():
+def test_calibration_recovers_known_parameters(synthetic_quotes):
     truth = HestonParams(v0=0.3, kappa=2.5, theta=0.4, xi=1.2, rho=-0.35)
     calibration = calibrate_heston(synthetic_quotes(truth, [0.05, 0.25, 0.75, 1.5]))
     np.testing.assert_allclose(

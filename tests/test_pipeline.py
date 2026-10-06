@@ -28,6 +28,8 @@ EXPECTED_TABLES = {
     "ssvi_arbitrage_tests",
     "heston",
     "heston_residuals",
+    "bates",
+    "bates_residuals",
     "model_ivs",
     "comparison_by_expiry",
     "comparison_by_maturity",
@@ -39,7 +41,20 @@ EXPECTED_TABLES = {
 @pytest.fixture(scope="module")
 def built(tmp_path_factory, btc_sample):
     out = tmp_path_factory.mktemp("results")
-    code = cli.main(["build", str(btc_sample.path), "--out", str(out), "--no-heston-per-expiry"])
+    config = out / "quick.toml"  # the pipeline's plumbing, not the quality of the optimum
+    config.write_text("[bates]\nn_starts = 1\nmax_evaluations = 40\n")
+    code = cli.main(
+        [
+            "build",
+            str(btc_sample.path),
+            "--out",
+            str(out),
+            "--config",
+            str(config),
+            "--no-heston-per-expiry",
+            "--no-bates-variants",
+        ]
+    )
     assert code == 0
     return load_results(out / "BTC" / btc_sample.path.name)
 
@@ -47,10 +62,13 @@ def built(tmp_path_factory, btc_sample):
 def test_build_writes_every_table_and_a_manifest(built, btc_sample):
     assert set(built.tables) >= EXPECTED_TABLES
     assert "heston_per_expiry" not in built.tables  # skipped on request
+    assert "bates_variants" not in built.tables
     manifest = built.manifest
     assert manifest["snapshot_utc"] == btc_sample.manifest["snapshot_utc"]
     assert manifest["currency"] == "BTC"
     assert set(manifest["heston"]) >= {"v0", "kappa", "theta", "xi", "rho", "feller_ratio"}
+    assert set(manifest["bates"]) >= {"lam", "mu_j", "sigma_j", "jump_mean", "at_bounds"}
+    assert manifest["config"]["bates"]["n_starts"] == 1
     assert len(manifest["ssvi"]["theta"]) == len(built["svi"])
     assert manifest["config"]["cleaning"]["forward_method"] == "parity"
     assert all(seconds >= 0 for seconds in manifest["timings_seconds"].values())
@@ -61,6 +79,7 @@ def test_results_round_trip_the_analysis(built, btc_sample):
     assert len(quotes) == len(btc_sample["option_book"])
     kept = quotes[quotes["removed_by"].isna()]
     assert len(built["model_ivs"]) == len(kept)
+    assert built["model_ivs"]["iv_bates"].notna().all()
     assert built["svi"]["in_band_share"].min() >= 0.9
     assert (built["ssvi_arbitrage_tests"]["violations"] == 0).all()
 
@@ -76,6 +95,8 @@ def test_report_writes_markdown_and_figures(built, tmp_path, capsys):
         "## Smiles",
         "## Static arbitrage",
         "## Heston",
+        "## Bates",
+        "## Model comparison",
         "## Surface",
     ):
         assert heading in text

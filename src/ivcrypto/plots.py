@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import matplotlib
@@ -24,9 +24,10 @@ import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
+from ivcrypto.bates.charfunc import BatesParams
 from ivcrypto.compare import power_law
 from ivcrypto.heston.charfunc import HestonParams
-from ivcrypto.heston.pricer import price as heston_price
+from ivcrypto.heston.pricer import price as model_price
 from ivcrypto.implied_vol import implied_vols
 from ivcrypto.pipeline import Results
 from ivcrypto.svi.raw import SVIParams
@@ -78,7 +79,7 @@ THEMES = {"light": LIGHT, "dark": DARK}
 
 SVI_LABEL = "SVI, fitted per expiry"
 HESTON_LABEL = "Heston, one parameter set"
-HESTON_EXPIRY_LABEL = "Heston, fitted to this expiry"
+BATES_LABEL = "Bates, one parameter set"
 MARKET_LABEL = "Market: bid to ask, and mid"
 
 
@@ -128,10 +129,10 @@ def _save(fig: Figure, out: Path) -> Path:
     return out
 
 
-def _heston_smile(params: HestonParams, k: np.ndarray, T: float) -> np.ndarray:
+def _model_smile(params: HestonParams | BatesParams, k: np.ndarray, T: float) -> np.ndarray:
     strikes = np.exp(k)
     calls = k >= 0
-    return implied_vols(heston_price(1.0, strikes, T, params, calls), 1.0, strikes, T, calls)
+    return implied_vols(model_price(1.0, strikes, T, params, calls), 1.0, strikes, T, calls)
 
 
 def _svi_params(row: pd.Series) -> SVIParams:
@@ -139,23 +140,20 @@ def _svi_params(row: pd.Series) -> SVIParams:
 
 
 def _heston_params(values: dict | pd.Series) -> HestonParams:
-    return HestonParams(
-        v0=float(values["v0"]),
-        kappa=float(values["kappa"]),
-        theta=float(values["theta"]),
-        xi=float(values["xi"]),
-        rho=float(values["rho"]),
-    )
+    return HestonParams(**{f.name: float(values[f.name]) for f in fields(HestonParams)})
+
+
+def _bates_params(values: dict | pd.Series) -> BatesParams:
+    return BatesParams(**{f.name: float(values[f.name]) for f in fields(BatesParams)})
 
 
 def smiles(results: Results, theme: Theme, out: Path) -> Path:
-    """One panel per fitted expiry: the market band and mid, SVI and both Heston fits."""
+    """One panel per fitted expiry: the market band and mid, SVI, Heston and Bates."""
     quotes = results["quotes"]
     kept = quotes[quotes["removed_by"].isna()]
     svi = results["svi"].set_index("expiry_code")
     heston = _heston_params(results.manifest["heston"])
-    per_expiry = results.get("heston_per_expiry")
-    per_expiry = per_expiry.set_index("expiry_code") if per_expiry is not None else None
+    bates = _bates_params(results.manifest["bates"])
     codes = list(svi.index)
     cols = 4
     rows = int(np.ceil(len(codes) / cols))
@@ -178,10 +176,8 @@ def smiles(results: Results, theme: Theme, out: Path) -> Path:
                 mew=0.6,
             )
             ax.plot(grid, 100 * _svi_params(svi.loc[code]).implied_vol(grid, T), color=blue)
-            ax.plot(grid, 100 * _heston_smile(heston, grid, T), color=orange)
-            if per_expiry is not None and code in per_expiry.index:
-                expiry_params = _heston_params(per_expiry.loc[code])
-                ax.plot(grid, 100 * _heston_smile(expiry_params, grid, T), color=aqua)
+            ax.plot(grid, 100 * _model_smile(heston, grid, T), color=orange)
+            ax.plot(grid, 100 * _model_smile(bates, grid, T), color=aqua)
             ax.set_title(f"{code}, {T * 365:.1f} days", loc="left")
         for ax in axes.flat[len(codes) :]:
             ax.set_visible(False)
@@ -205,9 +201,8 @@ def smiles(results: Results, theme: Theme, out: Path) -> Path:
             ),
             plt.Line2D([], [], color=blue, label=SVI_LABEL),
             plt.Line2D([], [], color=orange, label=HESTON_LABEL),
+            plt.Line2D([], [], color=aqua, label=BATES_LABEL),
         ]
-        if per_expiry is not None:
-            handles.append(plt.Line2D([], [], color=aqua, label=HESTON_EXPIRY_LABEL))
         fig.legend(
             handles=handles, loc="upper center", ncol=len(handles), bbox_to_anchor=(0.5, 1.0)
         )
@@ -216,37 +211,36 @@ def smiles(results: Results, theme: Theme, out: Path) -> Path:
 
 
 def atm_term_structure(results: Results, theme: Theme, out: Path) -> Path:
-    """ATM vol, and ATM curvature on log axes: market (SVI) against Heston."""
+    """ATM vol, and smile curvature over one ATM standard deviation on log axes: market
+    against Heston and Bates (``compare.atm_term_structure``)."""
     ts = results["atm_term_structure"]
-    orange = theme.series[1]
+    _, orange, aqua = theme.series
+    lines = [
+        ("market", "Market (SVI fit)", theme.ink_secondary, 1.0),
+        ("heston", HESTON_LABEL, orange, 1.4),
+        ("bates", BATES_LABEL, aqua, 1.4),
+    ]
     with themed(theme):
         fig, (left, right) = plt.subplots(1, 2, figsize=(10, 3.6))
         for ax, column, title in (
             (left, "atm_vol", "ATM implied volatility (%)"),
-            (right, "atm_curvature", "ATM curvature d2sigma/dk2 (log scale)"),
+            (right, "atm_curvature", "Smile curvature over one ATM std dev (log scale)"),
         ):
             scale = 100.0 if column == "atm_vol" else 1.0
-            ax.plot(
-                ts["days"],
-                scale * ts[f"market_{column}"],
-                "-o",
-                color=theme.ink_secondary,
-                lw=1.0,
-                ms=4,
-                mec=theme.surface,
-                mew=0.8,
-                label="Market (SVI at k = 0)",
-            )
-            ax.plot(
-                ts["days"],
-                scale * ts[f"heston_{column}"],
-                "-o",
-                color=orange,
-                ms=4,
-                mec=theme.surface,
-                mew=0.8,
-                label="Heston, one parameter set",
-            )
+            for name, label, color, width in lines:
+                if f"{name}_{column}" not in ts:
+                    continue
+                ax.plot(
+                    ts["days"],
+                    scale * ts[f"{name}_{column}"],
+                    "-o",
+                    color=color,
+                    lw=width,
+                    ms=4,
+                    mec=theme.surface,
+                    mew=0.8,
+                    label=label,
+                )
             ax.set_xscale("log")
             ax.set_xlabel("days to expiry (log scale)")
             ax.set_title(title, loc="left")
@@ -382,6 +376,7 @@ def residual_heatmaps(results: Results, theme: Theme, out: Path) -> Path:
     tables = {
         SVI_LABEL: residual_table(ivs, "iv_svi"),
         HESTON_LABEL: residual_table(ivs, "iv_heston"),
+        BATES_LABEL: residual_table(ivs, "iv_bates"),
     }
     limit = max(float(np.nanmax(np.abs(t.to_numpy()))) for t in tables.values())
     cmap = LinearSegmentedColormap.from_list("diverging", theme.diverging).with_extremes(
@@ -389,7 +384,7 @@ def residual_heatmaps(results: Results, theme: Theme, out: Path) -> Path:
     )
     days = ivs.groupby("expiry_code")["days"].first()
     with themed(theme):
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
+        fig, axes = plt.subplots(1, len(tables), figsize=(12, 4.4), sharey=True)
         for ax, (title, table) in zip(axes, tables.items(), strict=True):
             image = ax.imshow(
                 np.ma.masked_invalid(table.to_numpy()),

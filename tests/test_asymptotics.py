@@ -21,7 +21,7 @@ import pytest
 from scipy.stats import norm
 
 from ivcrypto import black76
-from ivcrypto.compare import heston_atm
+from ivcrypto.compare import model_atm
 from ivcrypto.heston.charfunc import HestonParams
 from ivcrypto.implied_vol import implied_vols
 
@@ -51,7 +51,7 @@ def merton_atm(T: float) -> tuple[float, float]:
 
 
 def test_heston_atm_skew_and_curvature_converge_as_maturity_shrinks():
-    ts = heston_atm(HESTON, np.array([1 / 16, 1 / 4, 1]) * DAY)
+    ts = model_atm(HESTON, np.array([1 / 16, 1 / 4, 1]) * DAY)
     limit = HESTON.rho * HESTON.xi / (4 * math.sqrt(HESTON.v0))
     assert ts["atm_skew"].iloc[0] == pytest.approx(limit, rel=0.01)
     curvature = ts["atm_curvature"].to_numpy()

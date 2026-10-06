@@ -1,7 +1,7 @@
 """The whole analysis of one snapshot, and its results on disk.
 
 ``analyze`` runs every stage (cleaning, implied volatilities, validation against Deribit,
-SVI, SSVI, static arbitrage, Heston and the model comparison). ``write_results`` stores
+SVI, SSVI, static arbitrage, Heston, Bates and the model comparison). ``write_results`` stores
 everything under ``<out>/<CURRENCY>/<snapshot id>/`` as Parquet, CSV and JSON, together with
 the effective configuration and the git commit, so every figure and number in a report
 traces back to its inputs. ``load_results`` reads a results directory back for reporting.
@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ivcrypto import __version__
@@ -28,12 +29,13 @@ from ivcrypto.arbitrage import (
     slices_from_ssvi,
     slices_from_svi,
 )
+from ivcrypto.bates.calibrate import calibrate_bates, calibrate_variants
 from ivcrypto.cleaning import CleanQuotes, clean_snapshot
 from ivcrypto.compare import atm_term_structure, compare_models, model_ivs
 from ivcrypto.config import Config, config_to_dict
 from ivcrypto.data.store import Snapshot, load_snapshot
 from ivcrypto.heston.calibrate import (
-    HestonCalibration,
+    Calibration,
     calibrate_heston,
     calibrate_per_expiry,
     calibration_quotes,
@@ -59,8 +61,10 @@ class Analysis:
     ssvi: SSVIFit
     arbitrage: ArbitrageReport
     ssvi_arbitrage: ArbitrageReport
-    heston: HestonCalibration
-    heston_per_expiry: dict[str, HestonCalibration]
+    heston: Calibration
+    heston_per_expiry: dict[str, Calibration]
+    bates: Calibration
+    bates_variants: dict[str, Calibration]
     model_ivs: pd.DataFrame
     atm: pd.DataFrame
     timings: dict[str, float]
@@ -74,7 +78,13 @@ def _timed(timings: dict[str, float], stage: str) -> Iterator[None]:
     logger.info("%s done in %.1f s", stage, timings[stage])
 
 
-def analyze(snapshot: Snapshot, config: Config, *, per_expiry_heston: bool = True) -> Analysis:
+def analyze(
+    snapshot: Snapshot,
+    config: Config,
+    *,
+    per_expiry_heston: bool = True,
+    bates_variants: bool = True,
+) -> Analysis:
     timings: dict[str, float] = {}
     with _timed(timings, "cleaning and implied volatilities"):
         clean = add_implied_vols(clean_snapshot(snapshot, config.cleaning))
@@ -91,13 +101,19 @@ def analyze(snapshot: Snapshot, config: Config, *, per_expiry_heston: bool = Tru
     quotes = calibration_quotes(clean)
     with _timed(timings, "Heston"):
         heston = calibrate_heston(quotes, config.heston)
-    per_expiry: dict[str, HestonCalibration] = {}
+    per_expiry: dict[str, Calibration] = {}
     if per_expiry_heston:
         with _timed(timings, "Heston per expiry"):
             per_expiry = calibrate_per_expiry(quotes, config.heston)
+    with _timed(timings, "Bates"):
+        bates = calibrate_bates(quotes, heston.params, config.heston, config.bates)
+    variants: dict[str, Calibration] = {}
+    if bates_variants:
+        with _timed(timings, "Bates variants"):
+            variants = calibrate_variants(quotes, heston.params, config.heston, config.bates)
     with _timed(timings, "comparison"):
-        ivs = model_ivs(svi, heston, per_expiry or None, ssvi)
-        atm = atm_term_structure(svi, heston.params)
+        ivs = model_ivs(svi, heston, per_expiry or None, ssvi, bates)
+        atm = atm_term_structure(svi, {"heston": heston.params, "bates": bates.params})
     return Analysis(
         snapshot=snapshot,
         config=config,
@@ -109,6 +125,8 @@ def analyze(snapshot: Snapshot, config: Config, *, per_expiry_heston: bool = Tru
         ssvi_arbitrage=ssvi_arbitrage,
         heston=heston,
         heston_per_expiry=per_expiry,
+        bates=bates,
+        bates_variants=variants,
         model_ivs=ivs,
         atm=atm,
         timings=timings,
@@ -153,6 +171,11 @@ def write_results(analysis: Analysis, root: Path | str) -> Path:
     parquet("heston_residuals", a.heston.residuals)
     if a.heston_per_expiry:
         csv("heston_per_expiry", _per_expiry_table(a.heston_per_expiry))
+    csv("bates", a.bates.summary())
+    parquet("bates_residuals", a.bates.residuals)
+    if a.bates_variants:
+        variants = {"default bounds": a.bates, **a.bates_variants}
+        csv("bates_variants", _variants_table(variants))
     parquet("model_ivs", a.model_ivs)
     csv("comparison_overall", compare_models(a.model_ivs, by=None))
     csv("comparison_by_expiry", compare_models(a.model_ivs, by="expiry_code"))
@@ -173,6 +196,18 @@ def write_results(analysis: Analysis, root: Path | str) -> Path:
             "feller_ratio": a.heston.params.feller_ratio,
             "cost": a.heston.cost,
             "start_costs": list(a.heston.start_costs),
+            "start_params": [list(x) for x in a.heston.start_params],
+            "at_bounds": list(a.heston.at_bounds),
+        },
+        "bates": {
+            **asdict(a.bates.params),
+            "feller_ratio": a.bates.params.feller_ratio,
+            "jump_mean": a.bates.params.jump_mean,
+            "jump_variance": a.bates.params.jump_variance,
+            "cost": a.bates.cost,
+            "start_costs": list(a.bates.start_costs),
+            "start_params": [list(x) for x in a.bates.start_params],
+            "at_bounds": list(a.bates.at_bounds),
         },
         "ssvi": {
             **asdict(a.ssvi.params),
@@ -187,7 +222,7 @@ def write_results(analysis: Analysis, root: Path | str) -> Path:
     return out
 
 
-def _per_expiry_table(per_expiry: dict[str, HestonCalibration]) -> pd.DataFrame:
+def _per_expiry_table(per_expiry: dict[str, Calibration]) -> pd.DataFrame:
     rows = []
     for code, cal in per_expiry.items():
         quality = cal.summary().iloc[0].to_dict()
@@ -197,6 +232,36 @@ def _per_expiry_table(per_expiry: dict[str, HestonCalibration]) -> pd.DataFrame:
                 **asdict(cal.params),
                 "feller_ratio": cal.params.feller_ratio,
                 **{k: v for k, v in quality.items() if k != "expiry_code"},
+                "at_bounds": "; ".join(cal.at_bounds),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+SHORT_END_DAYS = 7.0
+FAR_PUT_K = -0.2
+
+
+def _variants_table(fits: dict[str, Calibration]) -> pd.DataFrame:
+    """Bates fits under different jump bounds: parameters, fit quality and binding bounds."""
+    rows = []
+    for name, cal in fits.items():
+        r = cal.residuals
+        error = r["error_vol"]
+        short = r["T"] * 365.0 < SHORT_END_DAYS
+        far_put = r["k"] < FAR_PUT_K
+        rows.append(
+            {
+                "variant": name,
+                **asdict(cal.params),
+                "feller_ratio": cal.params.feller_ratio,
+                "jump_mean": cal.params.jump_mean,
+                "cost": cal.cost,
+                "rmse_vol": float(np.sqrt(np.mean(error**2))),
+                "rmse_short_end": float(np.sqrt(np.mean(error[short] ** 2))),
+                "rmse_far_puts": float(np.sqrt(np.mean(error[far_put] ** 2))),
+                "in_band_share": float(r["in_band"].mean()),
+                "at_bounds": "; ".join(cal.at_bounds),
             }
         )
     return pd.DataFrame(rows)
@@ -245,7 +310,13 @@ def build(
     out: Path | str,
     *,
     per_expiry_heston: bool = True,
+    bates_variants: bool = True,
 ) -> Path:
     """Load a snapshot, analyze it and write the results; returns the results directory."""
-    analysis = analyze(load_snapshot(snapshot_path), config, per_expiry_heston=per_expiry_heston)
+    analysis = analyze(
+        load_snapshot(snapshot_path),
+        config,
+        per_expiry_heston=per_expiry_heston,
+        bates_variants=bates_variants,
+    )
     return write_results(analysis, out)

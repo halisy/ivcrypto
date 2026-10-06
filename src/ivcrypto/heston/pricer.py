@@ -1,7 +1,8 @@
-"""European option prices under Heston, by Lewis's single integral formula.
+"""European option prices by Lewis's single integral formula, for Heston and Bates.
 
 For a forward F, strike K and k = ln(F / K), with phi the characteristic function of
-ln(F_T / F_0) (``charfunc.py``), Lewis (2001) gives the undiscounted call price
+ln(F_T / F_0) (``charfunc.py``; ``bates/charfunc.py`` adds jumps), Lewis (2001) gives the
+undiscounted call price
 
     C = F - sqrt(F K) / pi * I(k),   I(k) = int_0^inf Re[e^{i u k} phi(u - i/2)] / (u^2 + 1/4) du,
 
@@ -22,13 +23,24 @@ slow adaptive reference used only to validate the fast pricer.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import numpy as np
 import numpy.typing as npt
 from scipy.integrate import quad
 
-from ivcrypto.heston.charfunc import HestonParams, characteristic_function
+from ivcrypto.heston.charfunc import ComplexArray
 
 FloatArray = npt.NDArray[np.float64]
+
+
+class FourierModel(Protocol):
+    """A model priced through the characteristic function of ln(F_T / F_0)."""
+
+    def cf(self, u: npt.ArrayLike, T: float) -> ComplexArray: ...
+
+    def oscillation_rate(self, T: float) -> float: ...
+
 
 ENVELOPE_TOL = 1e-13
 """Integration stops where |phi(u - i/2)| / (u^2 + 1/4) stays below this."""
@@ -39,10 +51,10 @@ NEAR_ORIGIN = 10.0
 _GL_X, _GL_W = np.polynomial.legendre.leggauss(NODES_PER_PANEL)
 
 
-def integration_limit(T: float, params: HestonParams, tol: float = ENVELOPE_TOL) -> float:
+def integration_limit(T: float, params: FourierModel, tol: float = ENVELOPE_TOL) -> float:
     """Smallest U on a geometric grid beyond which the integrand envelope stays below ``tol``."""
     grid = np.geomspace(0.5, U_MAX, 400)
-    envelope = np.abs(characteristic_function(grid - 0.5j, T, params)) / (grid * grid + 0.25)
+    envelope = np.abs(params.cf(grid - 0.5j, T)) / (grid * grid + 0.25)
     above = np.flatnonzero(~(envelope < tol))  # NaN counts as not yet converged
     if above.size == 0:
         return float(grid[0])
@@ -55,7 +67,8 @@ def _nodes(upper: float, max_abs_k: float) -> tuple[FloatArray, FloatArray]:
     Near the origin the factor 1 / (u^2 + 1/4) has poles at u = +-i/2, only 0.5 away from
     the real axis; Gauss Legendre converges slowly on panels much wider than that distance
     (2 wide panels leave errors near 1e-10), so the first panels are 0.5 wide. Further out,
-    panels only need to resolve the oscillation e^{iuk} (wavelength 2 pi / |k|).
+    panels only need to resolve the oscillation of the integrand: e^{iuk} (wavelength
+    2 pi / |k|) plus whatever phase the characteristic function itself adds.
     """
     near = min(upper, NEAR_ORIGIN)
     far_width = min(2.0, 4.0 / max(max_abs_k, 1e-3))
@@ -70,12 +83,13 @@ def _nodes(upper: float, max_abs_k: float) -> tuple[FloatArray, FloatArray]:
     return nodes, weights
 
 
-def lewis_integral(k: npt.ArrayLike, T: float, params: HestonParams) -> FloatArray:
+def lewis_integral(k: npt.ArrayLike, T: float, params: FourierModel) -> FloatArray:
     """I(k) for an array of log moneyness k = ln(F / K) at one maturity."""
     k = np.atleast_1d(np.asarray(k, dtype=float))
     upper = integration_limit(T, params)
-    u, w = _nodes(upper, float(np.max(np.abs(k))) if k.size else 0.0)
-    phi = characteristic_function(u - 0.5j, T, params)
+    max_abs_k = float(np.max(np.abs(k))) if k.size else 0.0
+    u, w = _nodes(upper, max_abs_k + params.oscillation_rate(T))
+    phi = params.cf(u - 0.5j, T)
     scaled = w / (u * u + 0.25)
     phase = np.outer(k, u)
     return np.cos(phase) @ (scaled * phi.real) - np.sin(phase) @ (scaled * phi.imag)
@@ -85,10 +99,10 @@ def price(
     F: float,
     K: npt.ArrayLike,
     T: float,
-    params: HestonParams,
+    params: FourierModel,
     is_call: npt.ArrayLike,
 ) -> FloatArray:
-    """Undiscounted Heston prices of calls and puts on the forward F, at one maturity."""
+    """Undiscounted prices of calls and puts on the forward F, at one maturity."""
     K = np.asarray(K, dtype=float)
     shape = np.broadcast(K, np.asarray(is_call)).shape
     K_flat = np.broadcast_to(K, shape).ravel()
@@ -99,12 +113,12 @@ def price(
     return values.reshape(shape)
 
 
-def price_quad(F: float, K: float, T: float, params: HestonParams, is_call: bool) -> float:
+def price_quad(F: float, K: float, T: float, params: FourierModel, is_call: bool) -> float:
     """Adaptive quadrature reference for one option (slow; used for validation)."""
     k = np.log(F / K)
 
     def integrand(u: float) -> float:
-        phi = characteristic_function(u - 0.5j, T, params)
+        phi = params.cf(u - 0.5j, T)
         return float((np.exp(1j * u * k) * phi).real / (u * u + 0.25))
 
     integral, _ = quad(integrand, 0.0, np.inf, limit=5000, epsabs=1e-14, epsrel=1e-13)

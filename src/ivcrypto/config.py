@@ -98,16 +98,33 @@ class HestonConfig:
 
 
 @dataclass(frozen=True)
+class BatesConfig:
+    """Bates calibration (see ``bates/calibrate.py``). The objective, weighting and expiry
+    weights included, is Heston's, so the two models are compared on the same terms."""
+
+    n_starts: int = 4
+    """Starting points refined by least squares, besides Heston without jumps."""
+    max_evaluations: int = 600
+    """Function evaluation budget per start."""
+
+    def __post_init__(self) -> None:
+        _require(self.n_starts >= 1, "n_starts must be >= 1")
+        _require(self.max_evaluations >= 10, "max_evaluations must be >= 10")
+
+
+@dataclass(frozen=True)
 class Config:
     cleaning: CleaningConfig = field(default_factory=CleaningConfig)
     svi: SVIConfig = field(default_factory=SVIConfig)
     heston: HestonConfig = field(default_factory=HestonConfig)
+    bates: BatesConfig = field(default_factory=BatesConfig)
 
 
 SECTIONS: Mapping[str, type] = {
     "cleaning": CleaningConfig,
     "svi": SVIConfig,
     "heston": HestonConfig,
+    "bates": BatesConfig,
 }
 
 

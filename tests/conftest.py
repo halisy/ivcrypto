@@ -15,10 +15,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
+from ivcrypto import black76
 from ivcrypto.data.client import PRODUCTION_URL, DeribitAPIError, RpcResult
 from ivcrypto.data.store import Snapshot, find_snapshots, load_snapshot
+from ivcrypto.heston.calibrate import ExpiryQuotes
+from ivcrypto.heston.pricer import FourierModel, price
+from ivcrypto.implied_vol import implied_vols
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -121,3 +126,39 @@ class FixtureCaller:
 @pytest.fixture
 def fixture_caller() -> Callable[..., FixtureCaller]:
     return FixtureCaller
+
+
+def _synthetic_quotes(
+    params: FourierModel, maturities: list[float], F: float = 86_000.0
+) -> list[ExpiryQuotes]:
+    """Quotes priced by the model itself, with a 1 vol point band, for recovery tests."""
+    quotes = []
+    for T in maturities:
+        k = np.linspace(-2.5, 2.0, 15) * np.sqrt(params.theta * T)
+        strikes = F * np.exp(k)
+        calls = k >= 0
+        mid = price(F, strikes, T, params, calls)
+        iv = implied_vols(mid, F, strikes, T, calls)
+        quotes.append(
+            ExpiryQuotes(
+                expiry_code=f"T{T:.3f}",
+                T=T,
+                F=F,
+                instrument_name=np.array([f"q{i}" for i in range(k.size)], dtype=object),
+                K=strikes,
+                k=k,
+                is_call=calls,
+                mid=mid,
+                iv_bid=iv - 0.005,
+                iv_mid=iv,
+                iv_ask=iv + 0.005,
+                vega=black76.vega(F, strikes, T, iv),
+            )
+        )
+    return quotes
+
+
+@pytest.fixture
+def synthetic_quotes() -> Callable[..., list[ExpiryQuotes]]:
+    """``synthetic_quotes(params, maturities)``: model priced quotes (synthetic, tests only)."""
+    return _synthetic_quotes

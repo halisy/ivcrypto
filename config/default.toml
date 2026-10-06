@@ -45,3 +45,11 @@ equal_expiry_weights = true
 n_starts = 4
 # Function evaluation budget per start.
 max_evaluations = 400
+
+[bates]
+# Bates is calibrated on the [heston] objective (weighting and expiry weights), so the two
+# models are compared on the same terms. Starting points refined by least squares, besides
+# the calibrated Heston parameters without jumps, which are always refined.
+n_starts = 4
+# Function evaluation budget per start.
+max_evaluations = 600

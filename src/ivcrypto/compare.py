@@ -1,20 +1,28 @@
-"""Model comparison: SVI, SSVI and Heston on the same quotes, and the ATM skew term structure.
+"""Model comparison: SVI, SSVI, Heston and Bates on the same quotes, and ATM term structures.
 
 Every model is scored on the same fitted quotes with the same measures: RMSE of fitted minus
 mid IV (vol points), largest error, and the share of fitted IVs inside the bid ask band. The
 breakdown by maturity and moneyness shows where a model fails, not only how much.
 
-The ATM term structure is the sharpest test of Heston for short dated crypto options. In
-Heston the ATM skew dsigma/dk and curvature d2sigma/dk2 tend to finite limits as T -> 0 (the
+The ATM term structure is the sharpest test for short dated crypto options. In Heston the
+skew dsigma/dk and curvature d2sigma/dk2 at the money tend to finite limits as T -> 0 (the
 skew to rho xi / (4 sqrt(v0))), whereas with jumps the curvature grows without bound, like
-T^(-1/2) in a jump diffusion (``tests/test_asymptotics.py`` checks both). The market values
-are read off the SVI slices,
+T^(-1/2) in a jump diffusion (``tests/test_asymptotics.py`` checks both with
+:func:`model_atm`).
 
-    sigma'(0) = w' / (2 sqrt(w T)),    sigma''(0) = w'' / (2 sqrt(w T)) - w'^2 / (4 w^1.5 sqrt(T)),
+To compare market and models, skew and curvature are measured over one ATM standard deviation,
+s = sqrt(w(0)), at the same three strikes for every model:
 
-the Heston values by central differences of its implied vols, and a power law
-c T^(-alpha) is fitted to each. On short dated crypto smiles whose bottom sits slightly off
-the money, the skew changes sign across maturities, so the curvature is the cleaner measure.
+    skew = (sigma(s) - sigma(-s)) / (2 s),    curvature = (sigma(s) + sigma(-s) - 2 sigma(0)) / s^2,
+
+a risk reversal and a butterfly scaled to derivatives. The market's vols come from its SVI fit,
+the models' from their own prices. Derivatives exactly at k = 0 are fragile: a smile whose
+bottom sits just off the money, or a jump model whose nearly fixed jump sizes make its short
+dated smile wavy, can have a negative second derivative at k = 0 although it is convex over
+the quoted strikes. For smooth smiles the two measures agree (on the BTC sample the market's
+power law exponents differ by under 0.01), and with s proportional to sqrt(T) both keep the
+short maturity limits above. A power law c T^(-alpha) is fitted to each curvature term
+structure.
 """
 
 from __future__ import annotations
@@ -24,7 +32,8 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
-from ivcrypto.heston.calibrate import HestonCalibration
+from ivcrypto.bates.charfunc import BatesParams
+from ivcrypto.heston.calibrate import Calibration
 from ivcrypto.heston.charfunc import HestonParams
 from ivcrypto.heston.pricer import price
 from ivcrypto.implied_vol import implied_vols
@@ -47,17 +56,19 @@ def _scores(frame: pd.DataFrame, model_column: str) -> dict[str, float]:
 
 def model_ivs(
     svi: SVISurface,
-    heston: HestonCalibration,
-    heston_per_expiry: Mapping[str, HestonCalibration] | None = None,
+    heston: Calibration,
+    heston_per_expiry: Mapping[str, Calibration] | None = None,
     ssvi: SSVIFit | None = None,
+    bates: Calibration | None = None,
 ) -> pd.DataFrame:
     """One row per fitted quote with the mid, bid, ask and every model's IV."""
     frame = svi.residuals()[
         ["expiry_code", "T", "instrument_name", "k", "iv_bid", "iv_mid", "iv_ask", "iv_svi"]
     ]
-    frame = frame.merge(
-        heston.residuals[["instrument_name", "iv_heston"]], on="instrument_name", how="left"
-    )
+    for calibration in (heston, bates):
+        if calibration is not None:
+            columns = ["instrument_name", calibration.column]
+            frame = frame.merge(calibration.residuals[columns], on="instrument_name", how="left")
     if heston_per_expiry:
         per = pd.concat(
             [cal.residuals[["instrument_name", "iv_heston"]] for cal in heston_per_expiry.values()]
@@ -77,6 +88,7 @@ MODEL_COLUMNS = {
     "SVI": "iv_svi",
     "SSVI": "iv_ssvi",
     "Heston": "iv_heston",
+    "Bates": "iv_bates",
     "Heston per expiry": "iv_heston_expiry",
 }
 
@@ -99,26 +111,25 @@ def compare_models(ivs: pd.DataFrame, by: str | None = "expiry_code") -> pd.Data
     return pd.DataFrame(rows)
 
 
-def svi_atm(svi: SVISurface) -> pd.DataFrame:
-    """ATM vol, skew dsigma/dk and curvature d2sigma/dk2 at k = 0 of each SVI slice."""
-    rows = []
-    for fit in svi.fits.values():
-        w, dw, d2w = (float(x) for x in fit.params.derivatives(0.0))
-        root = np.sqrt(w * fit.T)
-        rows.append(
-            {
-                "expiry_code": fit.expiry_code,
-                "T": fit.T,
-                "atm_vol": float(np.sqrt(w / fit.T)),
-                "atm_skew": dw / (2.0 * root),
-                "atm_curvature": d2w / (2.0 * root) - dw * dw / (4.0 * w * root),
-            }
-        )
-    return pd.DataFrame(rows)
+def _model_vols(params: HestonParams | BatesParams, k: np.ndarray, T: float) -> np.ndarray:
+    strikes = np.exp(k)
+    calls = k >= 0
+    return implied_vols(price(1.0, strikes, T, params, calls), 1.0, strikes, T, calls)
 
 
-def heston_atm(params: HestonParams, T: np.ndarray, forward: float = 1.0) -> pd.DataFrame:
-    """ATM vol, skew and curvature of a Heston model by central differences of its IVs."""
+def _shape(name: str, vols: np.ndarray, s: float) -> dict[str, float]:
+    low, atm, high = (float(v) for v in vols)
+    return {
+        f"{name}_atm_vol": atm,
+        f"{name}_atm_skew": (high - low) / (2.0 * s),
+        f"{name}_atm_curvature": (high + low - 2.0 * atm) / (s * s),
+    }
+
+
+def model_atm(
+    params: HestonParams | BatesParams, T: np.ndarray, forward: float = 1.0
+) -> pd.DataFrame:
+    """Local ATM vol, skew and curvature of a model by central differences of its IVs."""
     rows = []
     for t in np.asarray(T, dtype=float):
         h = min(0.01, 0.25 * np.sqrt(params.theta * t))
@@ -146,20 +157,23 @@ def power_law(T: np.ndarray, values: np.ndarray) -> tuple[float, float]:
     return float(np.exp(intercept)), float(-slope)
 
 
-def atm_term_structure(svi: SVISurface, heston: HestonParams) -> pd.DataFrame:
-    """Market (SVI) and Heston ATM vol and skew at the fitted expiries."""
-    market = svi_atm(svi)
-    model = heston_atm(heston, market["T"].to_numpy())
-    return pd.DataFrame(
-        {
-            "expiry_code": market["expiry_code"],
-            "T": market["T"],
-            "days": market["T"] * 365.0,
-            "market_atm_vol": market["atm_vol"],
-            "heston_atm_vol": model["atm_vol"],
-            "market_atm_skew": market["atm_skew"],
-            "heston_atm_skew": model["atm_skew"],
-            "market_atm_curvature": market["atm_curvature"],
-            "heston_atm_curvature": model["atm_curvature"],
+def atm_term_structure(
+    svi: SVISurface, models: Mapping[str, HestonParams | BatesParams]
+) -> pd.DataFrame:
+    """ATM vol, skew and curvature of the market (its SVI fit) and of each model, measured at
+    the money and one ATM standard deviation either side (see the module docstring)."""
+    rows = []
+    for fit in svi.fits.values():
+        s = float(np.sqrt(fit.params.total_variance(0.0)))
+        k = np.array([-s, 0.0, s])
+        row: dict[str, object] = {
+            "expiry_code": fit.expiry_code,
+            "T": fit.T,
+            "days": fit.T * 365.0,
+            "atm_std": s,
+            **_shape("market", fit.params.implied_vol(k, fit.T), s),
         }
-    )
+        for name, params in models.items():
+            row.update(_shape(name, _model_vols(params, k, fit.T), s))
+        rows.append(row)
+    return pd.DataFrame(rows)

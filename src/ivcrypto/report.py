@@ -57,6 +57,7 @@ def _picture(name: str, alt: str, themes: Sequence[str]) -> str:
 def render(results: Results, themes: Sequence[str] = ("light", "dark")) -> str:
     m = results.manifest
     heston = m["heston"]
+    bates = m["bates"]
     ssvi = m["ssvi"]
     parts = [
         f"# {m['currency']} implied volatility report",
@@ -171,7 +172,71 @@ def render(results: Results, themes: Sequence[str] = ("light", "dark")) -> str:
         f"One parameter set: v0 = {heston['v0']:.4f}, kappa = {heston['kappa']:.3f}, "
         f"theta = {heston['theta']:.4f}, xi = {heston['xi']:.3f}, rho = {heston['rho']:+.3f}; "
         f"Feller ratio 2 kappa theta / xi^2 = {heston['feller_ratio']:.3f} "
-        f"({'satisfied' if heston['feller_ratio'] >= 1 else 'violated'}).",
+        f"({'satisfied' if heston['feller_ratio'] >= 1 else 'violated'})"
+        f"{_bounds_note(heston)}.",
+        "",
+    ]
+    per_expiry = results.get("heston_per_expiry")
+    if per_expiry is not None:
+        parts += [
+            "Heston fitted to each expiry separately:",
+            "",
+            markdown_table(
+                per_expiry.fillna({"at_bounds": ""}),
+                [
+                    ("expiry_code", "Expiry", ""),
+                    ("days", "Days", ".1f"),
+                    ("v0", "v0", ".3f"),
+                    ("kappa", "kappa", ".1f"),
+                    ("theta", "theta", ".3f"),
+                    ("xi", "xi", ".2f"),
+                    ("rho", "rho", "+.2f"),
+                    ("feller_ratio", "Feller ratio", ".2f"),
+                    ("rmse_vol", "RMSE", ".3f"),
+                    ("in_band_share", "Inside band", ".0%"),
+                    ("at_bounds", "At bounds", ""),
+                ],
+            ),
+            "",
+        ]
+    parts += [
+        "## Bates",
+        "",
+        f"One parameter set, calibrated on Heston's objective: v0 = {bates['v0']:.4f}, "
+        f"kappa = {bates['kappa']:.3f}, theta = {bates['theta']:.4f}, xi = {bates['xi']:.3f}, "
+        f"rho = {bates['rho']:+.3f}; {bates['lam']:.1f} jumps a year with log size "
+        f"N({bates['mu_j']:+.4f}, {bates['sigma_j']:.4f}^2), a mean jump of "
+        f"{bates['jump_mean']:+.2%}; jumps add {bates['jump_variance']:.4f} of variance a year "
+        f"against theta = {bates['theta']:.4f} from the diffusion. Feller ratio "
+        f"{bates['feller_ratio']:.3f}{_bounds_note(bates)}.",
+        "",
+    ]
+    variants = results.get("bates_variants")
+    if variants is not None:
+        parts += [
+            "Bates refitted with one jump bound changed (RMSE in vol points; short end: under "
+            "7 days; far puts: k below -0.2):",
+            "",
+            markdown_table(
+                variants.fillna({"at_bounds": ""}),
+                [
+                    ("variant", "Variant", ""),
+                    ("lam", "lam", ".1f"),
+                    ("mu_j", "mu_j", "+.4f"),
+                    ("sigma_j", "sigma_j", ".4f"),
+                    ("xi", "xi", ".2f"),
+                    ("rho", "rho", "+.2f"),
+                    ("rmse_vol", "RMSE", ".2f"),
+                    ("rmse_short_end", "Short end", ".2f"),
+                    ("rmse_far_puts", "Far puts", ".2f"),
+                    ("in_band_share", "Inside band", ".0%"),
+                    ("at_bounds", "At bounds", ""),
+                ],
+            ),
+            "",
+        ]
+    parts += [
+        "## Model comparison",
         "",
         _picture("residual_heatmaps", "Mean model minus mid IV by expiry and moneyness", themes),
         "",
@@ -186,29 +251,12 @@ def render(results: Results, themes: Sequence[str] = ("light", "dark")) -> str:
         _picture("surface", "SVI implied volatility surface", themes),
         "",
     ]
-    per_expiry = results.get("heston_per_expiry")
-    if per_expiry is not None:
-        parts[parts.index("## Surface") : parts.index("## Surface")] = [
-            "Heston fitted to each expiry separately:",
-            "",
-            markdown_table(
-                per_expiry,
-                [
-                    ("expiry_code", "Expiry", ""),
-                    ("days", "Days", ".1f"),
-                    ("v0", "v0", ".3f"),
-                    ("kappa", "kappa", ".1f"),
-                    ("theta", "theta", ".3f"),
-                    ("xi", "xi", ".2f"),
-                    ("rho", "rho", "+.2f"),
-                    ("feller_ratio", "Feller ratio", ".2f"),
-                    ("rmse_vol", "RMSE", ".3f"),
-                    ("in_band_share", "Inside band", ".0%"),
-                ],
-            ),
-            "",
-        ]
     return "\n".join(parts)
+
+
+def _bounds_note(params: dict) -> str:
+    at_bounds = params.get("at_bounds") or []
+    return f"; at a bound: {', '.join(at_bounds)}" if at_bounds else ""
 
 
 def _comparison_tables(results: Results) -> str:
@@ -221,34 +269,34 @@ def _comparison_tables(results: Results) -> str:
         ],
         ignore_index=True,
     )
-    for model in ("SVI", "SSVI", "Heston", "Heston per expiry"):
+    for model in ("SVI", "SSVI", "Heston", "Bates", "Heston per expiry"):
         if f"{model} rmse" in frame:
             columns.append((f"{model} rmse", f"{model} RMSE", ".2f"))
-    for model in ("SVI", "Heston"):
-        columns.append((f"{model} inside_band", f"{model} inside band", ".0%"))
+    for model in ("SVI", "Heston", "Bates"):
+        if f"{model} inside_band" in frame:
+            columns.append((f"{model} inside_band", f"{model} inside band", ".0%"))
     return markdown_table(frame, columns)
 
 
 def _atm_table(results: Results) -> str:
     ts = results["atm_term_structure"]
-    _, alpha_market = power_law(ts["T"], ts["market_atm_curvature"])
-    _, alpha_heston = power_law(ts["T"], ts["heston_atm_curvature"])
-    table = markdown_table(
-        ts,
-        [
-            ("expiry_code", "Expiry", ""),
-            ("days", "Days", ".1f"),
-            ("market_atm_vol", "Market ATM vol", ".2%"),
-            ("heston_atm_vol", "Heston ATM vol", ".2%"),
-            ("market_atm_skew", "Market skew", "+.3f"),
-            ("heston_atm_skew", "Heston skew", "+.3f"),
-            ("market_atm_curvature", "Market curvature", ".3f"),
-            ("heston_atm_curvature", "Heston curvature", ".3f"),
-        ],
+    columns: list[Column] = [("expiry_code", "Expiry", ""), ("days", "Days", ".1f")]
+    models = [m for m in ("market", "heston", "bates") if f"{m}_atm_vol" in ts]
+    for measure, header, spec in (
+        ("atm_vol", "ATM vol", ".2%"),
+        ("atm_skew", "skew", "+.3f"),
+        ("atm_curvature", "curvature", ".2f"),
+    ):
+        for model in models:
+            columns.append((f"{model}_{measure}", f"{model.capitalize()} {header}", spec))
+    fits = ", ".join(
+        f"{model} alpha = {power_law(ts['T'], ts[f'{model}_atm_curvature'])[1]:.2f}"
+        for model in models
     )
     return (
-        f"{table}\n\nPower law fits of ATM curvature c T^-alpha: market alpha = "
-        f"{alpha_market:.2f}, Heston alpha = {alpha_heston:.2f}."
+        f"{markdown_table(ts, columns)}\n\nSkew and curvature are measured over one ATM "
+        f"standard deviation either side of the money, at the same strikes for the market (its "
+        f"SVI fit) and the models. Power law fits of the curvature c T^-alpha: {fits}."
     )
 
 

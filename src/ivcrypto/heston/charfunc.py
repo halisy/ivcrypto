@@ -51,6 +51,15 @@ class HestonParams:
     def as_array(self) -> npt.NDArray[np.float64]:
         return np.array([self.v0, self.kappa, self.theta, self.xi, self.rho])
 
+    def cf(self, u: npt.ArrayLike, T: float) -> ComplexArray:
+        """Characteristic function of ln(F_T / F_0), see :func:`characteristic_function`."""
+        return characteristic_function(u, T, self)
+
+    def oscillation_rate(self, T: float) -> float:
+        """Phase rate of ``cf`` along the pricing contour, beyond e^{iuk}, that the quadrature
+        must resolve. Heston's own phase varies slowly (the pricer tests cover it)."""
+        return 0.0
+
 
 def complex_log1p(z: npt.ArrayLike) -> ComplexArray:
     """log(1 + z) accurate for tiny complex z.

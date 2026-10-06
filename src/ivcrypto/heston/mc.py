@@ -110,7 +110,20 @@ def mc_price(
     """Undiscounted Heston prices by Monte Carlo, with standard errors."""
     rng = np.random.default_rng(seed)
     n_steps = max(4, int(np.ceil(steps_per_year * T)))
-    forward_T = F * np.exp(simulate_log_forward(params, T, n_paths, n_steps, rng))
+    log_forward = simulate_log_forward(params, T, n_paths, n_steps, rng)
+    return price_paths(F, K, F * np.exp(log_forward), is_call, control_variate=control_variate)
+
+
+def price_paths(
+    F: float,
+    K: npt.ArrayLike,
+    forward_T: FloatArray,
+    is_call: npt.ArrayLike,
+    *,
+    control_variate: bool = True,
+) -> MCResult:
+    """Prices, standard errors and the forward check from simulated terminal forwards."""
+    n_paths = forward_T.size
     K = np.atleast_1d(np.asarray(K, dtype=float))
     calls = np.broadcast_to(np.asarray(is_call, dtype=bool), K.shape)
     payoff = np.where(

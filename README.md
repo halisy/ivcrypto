@@ -3,7 +3,8 @@
 Implied volatility surfaces for Bitcoin and Ether options, built from real Deribit order book
 snapshots. The package computes implied volatilities that reproduce Deribit's own, fits SVI to
 every expiry, tests the quotes and the fits for static arbitrage, fits an arbitrage free SSVI
-surface and calibrates Heston, then measures where each model fails and by how much.
+surface and calibrates Heston and Bates (Heston with jumps), then measures where each model
+fails and by how much.
 
 This README is a short research note on one BTC and one ETH snapshot taken on the evening of
 5 October 2026. Every number in it comes from the generated reports in
@@ -33,19 +34,26 @@ one year):
    as it must in any diffusive stochastic volatility model, and from 2 to 10 days the market's
    smiles even tilt the opposite way to Heston's. Fitted to one expiry at a time, Heston still
    misses by 1.3 vol points and pushes vol of vol and mean reversion to their bounds.
-5. **The failure points to jumps.** Short dated curvature that grows without bound, far put
-   vols above 90% and parameters that run to their bounds are what a jump component produces.
-   ETH shows the same pattern, more strongly. Bates (Heston plus jumps) is the next model to
-   test.
+5. **Jumps (Bates) fix the middle of the surface, not the short end, and not as crashes.** Bates
+   more than halves Heston's error on BTC (0.87 against 2.01 vol points RMSE, 43% of fitted vols
+   inside the band) and cuts it by a quarter on ETH (2.27 against 3.06). Its smile curvature
+   matches the market's within about 20% from 10 to 80 days, where Heston's is up to 2.3 times
+   too high, but the 2 and 3 day smiles stay the worst fitted: at 2.4 days Bates has a quarter
+   of the market's curvature on BTC and nearly twice it on ETH. The jumps the calibration asks
+   for are frequent, small and upward on average (87 to 100 a year of +1% to +2.5%, the BTC
+   intensity at its cap), not rare crashes: when jumps must be down on average, their mean goes
+   to exactly zero on both coins. The 2 to 3 day smiles need something else, such as a second,
+   fast variance factor or rough volatility.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="reports/sample/BTC/20261005T222705Z/figures/smiles_dark.png">
-  <img alt="BTC smiles for ten expiries: market bid ask bands and mids, SVI, Heston with one parameter set and Heston fitted per expiry" src="reports/sample/BTC/20261005T222705Z/figures/smiles_light.png">
+  <img alt="BTC smiles for ten expiries: market bid ask bands and mids, SVI per expiry, and Heston and Bates with one parameter set each" src="reports/sample/BTC/20261005T222705Z/figures/smiles_light.png">
 </picture>
 
-*BTC smiles: market bid to ask (bars) and mids (dots), SVI fitted per expiry, Heston with one
-parameter set for all expiries, and Heston fitted to each expiry alone. Heston misses the short
-dated curvature and the far put wings.*
+*BTC smiles: market bid to ask (bars) and mids (dots), SVI fitted per expiry, and Heston and
+Bates, each with one parameter set for all expiries. Heston misses the short dated curvature and
+the far put wings. Bates fixes the wings and the maturities beyond 10 days but not the 2 and 3
+day smiles, where its nearly fixed jump size puts a kink next to the money.*
 
 ## Motivation
 
@@ -63,7 +71,8 @@ The note asks four questions:
 2. How well does SVI fit each expiry, judged against the bid ask spread rather than the mid
    alone?
 3. Are the quotes, and the surfaces fitted to them, free of static arbitrage?
-4. Where, and by how much, does Heston fail, and what does the pattern of failure point to?
+4. Where, and by how much, does Heston fail, does adding jumps (Bates) fix it, and what does
+   the pattern of failure point to?
 
 ## Data
 
@@ -102,8 +111,8 @@ and null conventions, and the checks that established Deribit's pricing conventi
 
 `ivcrypto build` runs the analysis of one snapshot in this order: forwards and cleaning,
 implied volatilities, validation against Deribit, SVI per expiry, SSVI, static arbitrage checks,
-Heston, comparison. Where a step had a meaningful alternative, the choice and its tradeoff are
-stated with it.
+Heston, Bates, comparison. Where a step had a meaningful alternative, the choice and its
+tradeoff are stated with it.
 
 ### Prices, forwards and time
 
@@ -266,6 +275,58 @@ high vol of vol that the smiles demand. As a diagnostic, Heston is also fitted t
 alone, which shows whether a failure is about the term structure or about the shape of single
 smiles.
 
+### Bates
+
+**Model.** Bates (1996) adds a jump to Heston's forward: `lam` jumps a year, with log sizes
+N(`mu_j`, `sigma_j^2`), independent of the diffusion and compensated so that the forward stays
+a martingale. The characteristic function is Heston's times
+`exp(lam T (exp(i u mu_j - u^2 sigma_j^2 / 2) - 1 - i u m))`, with `m = exp(mu_j + sigma_j^2/2) - 1`
+the mean relative jump, so Bates slots into the Lewis pricer unchanged; the quadrature only adds
+panels for the extra phase the jumps bring. Lognormal jumps rather than Kou's double
+exponential jumps (separate up and down tails, at one more parameter) or jumps in the variance
+as well (SVJJ, Duffie, Pan and Singleton 2000): Bates is the standard first step and the model
+the Heston diagnosis points to, and it keeps every other part of the pipeline unchanged.
+
+**Validation.**
+
+| Test | Result |
+|---|---|
+| No jumps (`lam` = 0) | identical to Heston, bit for bit |
+| xi → 0 with v0 = theta, against Merton's jump diffusion priced as a Poisson mixture of Black 76 prices | within 1e-13 of F at 2 days, 0.1 and 1 year (test tolerance 1e-12) |
+| Fast quadrature against adaptive quadrature, 2 days to 1 year, including 100 jumps a year of fixed size | largest difference 1.2e-12 of F |
+| Monte Carlo: QE for the variance, exact compound Poisson jumps at maturity, 100,000 paths | every price within 4 standard errors (largest z = 2.03 over 21 prices); the simulated forward is a martingale |
+| Characteristic function at u = 0 and u = -i | 1 (the forward is a martingale) |
+| Calibration on quotes priced by Bates itself | IV errors under 0.01 vol points, intensity recovered within 5% |
+| Calibration on quotes priced by Heston | no jumps found (`lam` at 0), Heston parameters recovered to 1e-4 |
+
+**Calibration.** Exactly Heston's objective, quotes and weights, so that the two models differ
+only in the jumps. Bates nests Heston, and the calibrated Heston parameters with no jumps are
+always among the refined starts, so Bates can only improve on Heston. Bounds: Heston's for the
+variance; `lam` in [0, 100] a year, `mu_j` in [-1, 1], `sigma_j` in [0, 1]. The cap on `lam` is
+the one judgment call: at two jumps a week, jumps stop being rare events and start to act as a
+second source of diffusion. Starting points: the calibrated Heston parameters and the eight
+Heston starts, each crossed with twelve jump settings (2, 10 or 40 jumps a year; mean log jump
+-0.1 or +0.05; jump volatility 0.04 or 0.12); the four best by initial cost are refined, plus
+the no jump start if it is not among them. Three diagnostic refits each change one jump bound:
+jumps down on average (`mu_j` at most 0), rare jumps (at most 10 a year), and many jumps (up to
+1000 a year). They show which kind of jump the data ask for.
+
+### Comparing models
+
+Every model is scored on the same quotes: RMSE of model minus mid IV, largest error, and the
+share of model IVs inside the bid ask band, overall and by maturity and moneyness. The ATM term
+structure compares skew and curvature over one ATM standard deviation either side of the money,
+`s = sqrt(w(0))`, at the same three strikes for the market (its SVI fit) and for each model:
+
+    skew = (sigma(s) - sigma(-s)) / (2 s),    curvature = (sigma(s) + sigma(-s) - 2 sigma(0)) / s^2.
+
+A first version used the derivatives at k = 0. For smooth smiles the two agree (the market's
+power law exponents move by at most 0.01), but the calibrated Bates smile at 2.4 days has a
+kink next to the money, from its nearly fixed jump size, and a negative second derivative at
+k = 0 although it rises on both sides over the quoted strikes. With s proportional to sqrt(T), the
+measure keeps the short maturity limits of the derivatives (finite for Heston, growing like
+T^(-1/2) with jumps).
+
 ## Data issues encountered
 
 * **Inverse settlement.** The obvious conversion, coin price times the spot index, produced IV
@@ -384,80 +445,84 @@ kappa = 15.3, xi = 4.96, rho = -0.11. The Feller ratio `2 kappa theta / xi^2` is
 calibration needs a vol of vol near 5, with mean reversion fast enough (half life 16 days) to
 stop that vol of vol from flattening the long end.
 
-Scored on the same 373 quotes (RMSE in vol points; share of fitted IVs inside the bid ask band):
+Every model scored on the same 373 quotes (RMSE in vol points; share of model IVs inside the
+bid ask band):
 
-| Quotes | n | SVI | SSVI | Heston | Heston per expiry | SVI inside band | Heston inside band |
-|---|---|---|---|---|---|---|---|
-| all | 373 | 0.23 | 2.10 | 2.01 | 1.26 | 98% | 20% |
-| under 7 days | 39 | 0.30 | 2.24 | 2.74 | 1.23 | 97% | 18% |
-| 7 to 30 days | 91 | 0.30 | 2.24 | 1.86 | 1.13 | 97% | 21% |
-| 30 to 90 days | 96 | 0.23 | 3.01 | 2.65 | 1.89 | 97% | 24% |
-| over 90 days | 147 | 0.13 | 0.88 | 1.23 | 0.70 | 100% | 18% |
-| k below -0.2 (far puts) | 82 | 0.33 | 3.92 | 3.21 | 2.20 | 98% | 30% |
-| k -0.2 to -0.05 | 69 | 0.26 | 1.08 | 1.72 | 1.16 | 96% | 22% |
-| k -0.05 to 0.05 (at the money) | 85 | 0.16 | 1.54 | 1.85 | 0.82 | 100% | 8% |
-| k 0.05 to 0.2 | 72 | 0.14 | 0.85 | 1.03 | 0.67 | 100% | 18% |
-| k above 0.2 (far calls) | 65 | 0.18 | 0.84 | 1.14 | 0.44 | 97% | 23% |
+| Quotes | n | SVI | SSVI | Heston | Heston per expiry | Bates | SVI inside band | Heston inside band | Bates inside band |
+|---|---|---|---|---|---|---|---|---|---|
+| all | 373 | 0.23 | 2.10 | 2.01 | 1.26 | 0.87 | 98% | 20% | 43% |
+| under 7 days | 39 | 0.30 | 2.24 | 2.74 | 1.23 | 1.39 | 97% | 18% | 56% |
+| 7 to 30 days | 91 | 0.30 | 2.24 | 1.86 | 1.13 | 0.77 | 97% | 21% | 53% |
+| 30 to 90 days | 96 | 0.23 | 3.01 | 2.65 | 1.89 | 0.99 | 97% | 24% | 41% |
+| over 90 days | 147 | 0.13 | 0.88 | 1.23 | 0.70 | 0.62 | 100% | 18% | 36% |
+| k below -0.2 (far puts) | 82 | 0.33 | 3.92 | 3.21 | 2.20 | 1.00 | 98% | 30% | 57% |
+| k -0.2 to -0.05 | 69 | 0.26 | 1.08 | 1.72 | 1.16 | 1.04 | 96% | 22% | 23% |
+| k -0.05 to 0.05 (at the money) | 85 | 0.16 | 1.54 | 1.85 | 0.82 | 0.89 | 100% | 8% | 36% |
+| k 0.05 to 0.2 | 72 | 0.14 | 0.85 | 1.03 | 0.67 | 0.40 | 100% | 18% | 58% |
+| k above 0.2 (far calls) | 65 | 0.18 | 0.84 | 1.14 | 0.44 | 0.83 | 97% | 23% | 40% |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="reports/sample/BTC/20261005T222705Z/figures/residual_heatmaps_dark.png">
-  <img alt="Heatmaps of mean model minus mid IV by expiry and moneyness bucket, for SVI and Heston" src="reports/sample/BTC/20261005T222705Z/figures/residual_heatmaps_light.png">
+  <img alt="Heatmaps of mean model minus mid IV by expiry and moneyness bucket, for SVI, Heston and Bates" src="reports/sample/BTC/20261005T222705Z/figures/residual_heatmaps_light.png">
 </picture>
 
 *Mean model minus mid IV (vol points) by expiry and moneyness. SVI's errors stay under half a vol
 point in every cell. Heston's have structure: its 2 and 3 day smiles are too flat (wings 1.7 to
 4.3 vol points low), its 10 to 80 day smiles too curved (ATM 1.3 to 2.2 vol points low), and
-most of its far puts are too cheap.*
+most of its far puts are too cheap. Bates removes most of that structure; what remains sits at
+2 and 3 days.*
 
-| Expiry | Days | Quotes | ATM vol | SVI | SVI inside band | SSVI | Heston | Heston per expiry |
-|---|---|---|---|---|---|---|---|---|
-| 8OCT26 | 2.4 | 20 | 29.1% | 0.27 | 100% | 2.34 | 2.44 | 0.86 |
-| 9OCT26 | 3.4 | 19 | 31.2% | 0.34 | 95% | 2.12 | 3.03 | 1.53 |
-| 16OCT26 | 10.4 | 19 | 32.2% | 0.23 | 100% | 1.79 | 1.90 | 0.67 |
-| 23OCT26 | 17.4 | 23 | 32.5% | 0.15 | 100% | 1.15 | 1.39 | 0.74 |
-| 30OCT26 | 24.4 | 49 | 33.5% | 0.37 | 94% | 2.74 | 2.03 | 1.39 |
-| 27NOV26 | 52.4 | 48 | 35.7% | 0.17 | 98% | 0.92 | 1.40 | 0.81 |
-| 25DEC26 | 80.4 | 48 | 36.4% | 0.28 | 96% | 4.16 | 3.47 | 2.55 |
-| 26MAR27 | 171.4 | 52 | 37.3% | 0.16 | 100% | 1.16 | 1.41 | 0.89 |
-| 25JUN27 | 262.4 | 54 | 38.4% | 0.11 | 100% | 0.82 | 1.33 | 0.74 |
-| 24SEP27 | 353.4 | 41 | 38.9% | 0.07 | 100% | 0.44 | 0.76 | 0.17 |
+| Expiry | Days | Quotes | ATM vol | SVI | SVI inside band | SSVI | Heston | Heston per expiry | Bates |
+|---|---|---|---|---|---|---|---|---|---|
+| 8OCT26 | 2.4 | 20 | 29.1% | 0.27 | 100% | 2.34 | 2.44 | 0.86 | 1.30 |
+| 9OCT26 | 3.4 | 19 | 31.2% | 0.34 | 95% | 2.12 | 3.03 | 1.53 | 1.47 |
+| 16OCT26 | 10.4 | 19 | 32.2% | 0.23 | 100% | 1.79 | 1.90 | 0.67 | 0.90 |
+| 23OCT26 | 17.4 | 23 | 32.5% | 0.15 | 100% | 1.15 | 1.39 | 0.74 | 0.56 |
+| 30OCT26 | 24.4 | 49 | 33.5% | 0.37 | 94% | 2.74 | 2.03 | 1.39 | 0.80 |
+| 27NOV26 | 52.4 | 48 | 35.7% | 0.17 | 98% | 0.92 | 1.40 | 0.81 | 0.75 |
+| 25DEC26 | 80.4 | 48 | 36.4% | 0.28 | 96% | 4.16 | 3.47 | 2.55 | 1.19 |
+| 26MAR27 | 171.4 | 52 | 37.3% | 0.16 | 100% | 1.16 | 1.41 | 0.89 | 0.44 |
+| 25JUN27 | 262.4 | 54 | 38.4% | 0.11 | 100% | 0.82 | 1.33 | 0.74 | 0.58 |
+| 24SEP27 | 353.4 | 41 | 38.9% | 0.07 | 100% | 0.44 | 0.76 | 0.17 | 0.83 |
 
 *RMSE in vol points per BTC expiry.*
 
 **The short end.** In Heston, as in any diffusive stochastic volatility model, the ATM skew and
-curvature of the smile converge to finite limits as T → 0; the skew converges to
+curvature of the smile converge to finite limits as T → 0; the skew at k = 0 converges to
 `rho xi / (4 sqrt(v0))`, -0.41 for these parameters. The market's curvature shows no such limit.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="reports/sample/BTC/20261005T222705Z/figures/atm_term_structure_dark.png">
-  <img alt="ATM implied volatility and ATM curvature against days to expiry, market and Heston" src="reports/sample/BTC/20261005T222705Z/figures/atm_term_structure_light.png">
+  <img alt="ATM implied volatility and smile curvature against days to expiry, for the market, Heston and Bates" src="reports/sample/BTC/20261005T222705Z/figures/atm_term_structure_light.png">
 </picture>
 
-* The market's ATM curvature `d2sigma/dk2` grows like T^(-1.07) from a year down to 2.4 days,
-  and faster, like T^(-1.27), over the three shortest expiries: it rises 66% from 3.4 to 2.4
-  days (48.7 to 80.9). Heston's rises 4% over the same step (63.9 to 66.5). Its curvature is
-  nearly flat below 10 days (exponent 0.37) and falls steeply beyond 50 days (exponent 1.66,
-  against the market's 1.06), as smiles flatten beyond the mean reversion time 1/kappa of 24
-  days. A single power law fitted to all ten Heston points gives 1.12, close to the market's
-  1.07, which is why such a summary misleads: it averages two wrong regimes.
+* The market's smile curvature (over one ATM standard deviation, see Comparing models) grows
+  like T^(-1.07) from a year down to 2.4 days, and faster, like T^(-1.26), over the three
+  shortest expiries: it rises 64% from 3.4 to 2.4 days (47.5 to 78.0). Heston's rises 11% over
+  the same step (50.8 to 56.4). Its curvature is nearly flat below 10 days (exponent 0.49) and
+  falls steeply beyond 50 days (exponent 1.56, against the market's 1.06), as smiles flatten
+  beyond the mean reversion time 1/kappa of 24 days. A single power law fitted to all ten
+  Heston points gives 1.10, close to the market's 1.07, which is why such a summary misleads:
+  it averages two wrong regimes.
 * The single parameter set compromises between those regimes: too little curvature at 2.4 days,
-  too much from 3.4 to 171 days (2.5 to 3.2 times the market's between 10 and 52 days, 39.6
-  against 12.3 at 10 days), and too little again at a year, which spreads its errors over all
-  maturities.
+  too much from 3.4 to 171 days (1.7 to 2.3 times the market's between 10 and 80 days, 28.1
+  against 12.0 at 10 days), and too little again beyond 262 days, which spreads its errors over
+  all maturities.
 * At the very short end even the tilt of the smile is wrong. The market's 2 to 10 day smiles
-  slope upward at the money (their minimum sits just below the forward; the ATM skew is +0.84 at
-  2.4 days), while Heston's ATM skew is negative at every maturity.
+  slope upward at the money (their minimum sits just below the forward; the skew over one
+  standard deviation is +0.58 at 2.4 days), while Heston's skew is negative at every maturity
+  (-0.34 at 2.4 days).
 
 Curvature that keeps growing as maturity shrinks is what jumps produce. In a jump diffusion the
 ATM skew still converges, but the curvature grows without bound, like T^(-1/2) as T → 0; rough
-volatility models also steepen short dated smiles without bound.
+volatility models (Bayer, Friz and Gatheral 2016) also steepen short dated smiles without bound.
 [`tests/test_asymptotics.py`](tests/test_asymptotics.py) checks both limits numerically, against
 Heston and against Merton's jump diffusion.
 
 **The deep put wing.** The largest errors are far OTM puts. The worst quote overall is the
 25DEC26 put at strike 30k (k = -1.06): market 90.9% against 75.1% for the calibrated Heston, 15.8
 vol points short, and still 79.2% (11.7 vol points short) when Heston is fitted to that expiry
-alone. Crash protection is priced well beyond what a diffusion's tails allow.
+alone. Heston's tails are too thin for this wing; Bates, below, gets to 85.3%.
 
 **Refitting each expiry separately does not rescue it.** Each smile alone still misses by 0.2 to
 2.5 vol points, and the parameters it needs are implausible and unstable: vol of vol at the cap
@@ -482,6 +547,59 @@ The bounds are not what holds the fits back. Widening them in `heston/calibrate.
 RMSE improvements of only 0.07 and 0.17 vol points. The failure is structural, not a matter of
 bounds or optimizer.
 
+### Bates: jumps fix the middle, not the short end
+
+On BTC the calibrated jumps are 100 a year, the cap, each of a fixed +2.5% (`sigma_j` at its
+floor of 0), with the forward drifting down between jumps by as much as they add on average.
+The variance part: v0 = 0.046 (21% vol), theta = 0.133 (36%), kappa = 16.3, xi = 9.2,
+rho = -0.22, a Feller ratio of 0.05. Jumps contribute 0.060 of variance a year against 0.133
+from the diffusion. The optimum is not sharp: of the four refined starts, three end at a second
+optimum 10% worse in cost, with jump sizes spread by 2.4% around +0.7%.
+
+* **What it fixes.** RMSE falls from 2.01 to 0.87 vol points, and the share inside the band
+  rises from 20% to 43% (table above). The far puts improve most, 3.21 to 1.00 (the 30k put now
+  misses by 5.6 vol points instead of 15.8), and every maturity bucket at least roughly halves
+  its error. The smile curvature matches the market's within 12% from 10 to 80 days, where
+  Heston's is 1.7 to 2.3 times too high (figure above).
+* **What it does not.** The 2 and 3 day expiries remain the worst fitted (1.30 and 1.47 vol
+  points). At 2.4 days Bates has a quarter of the market's curvature (18.0 against 78.0), and
+  its curvature falls rather than rises from 3.4 to 2.4 days. Its skew there is positive, like
+  the market's, but twice as large (+1.14 against +0.58). With a fixed jump size of +2.5%,
+  close to the 2.4% standard deviation of a 2.4 day return, the short dated return distribution
+  is a mixture of a few shifted lumps, and the smile kinks next to the money (first figure).
+
+Which jumps do the data ask for? Each diagnostic refit changes one jump bound (RMSE in vol
+points; short end: under 7 days; far puts: k below -0.2):
+
+| Variant | | jumps a year | mean log jump | log jump vol | xi | RMSE | short end | far puts | inside band |
+|---|---|---|---|---|---|---|---|---|---|
+| default bounds | BTC | 100 (cap) | +0.024 | 0 (floor) | 9.2 | 0.87 | 1.39 | 1.00 | 43% |
+| jumps down on average | BTC | 100 (cap) | 0 (bound) | 0.027 | 9.99 | 1.03 | 2.23 | 0.95 | 37% |
+| at most 10 jumps a year | BTC | 10 (cap) | +0.054 | 0 (floor) | 5.6 | 1.36 | 2.05 | 1.90 | 34% |
+| up to 1000 jumps a year | BTC | 237 | +0.006 | 0.016 | 10 (cap) | 0.77 | 1.31 | 0.76 | 46% |
+| default bounds | ETH | 87 | +0.011 | 0.030 | 10 (cap) | 2.27 | 5.25 | 3.38 | 39% |
+| jumps down on average | ETH | 2.1 | 0 (bound) | 0.148 | 5.2 | 2.16 | 3.17 | 3.34 | 29% |
+| at most 10 jumps a year | ETH | 10 (cap) | +0.062 | 0.021 | 8.3 | 2.49 | 5.48 | 3.87 | 31% |
+| up to 1000 jumps a year | ETH | 87 | +0.011 | 0.030 | 10 (cap) | 2.27 | 5.25 | 3.38 | 39% |
+
+* **Not crashes.** Forced to be down on average, the mean jump goes to exactly zero, its bound,
+  on both coins, and limited to 10 a year the jumps come out upward (mean log jumps of +0.054
+  and +0.062). The short dated smiles bottom below the forward, which upward jumps reproduce and
+  Heston's negative rho cannot.
+* **The cap on BTC binds, but the conclusion does not depend on it.** Up to 1000 jumps a year,
+  BTC takes 237 small ones (0.6% on average) and puts xi on its own cap; the short end improves
+  only from 1.39 to 1.31.
+* **On ETH, RMSE and the objective disagree.** Symmetric rare jumps (2 a year of 15% volatility)
+  have a lower RMSE (2.16) but a higher objective than the default fit, because RMSE counts
+  every quote equally while the objective gives every expiry equal weight; at the short end
+  both still miss by more than 3 vol points.
+
+The reading: in Bates the jumps act here as a fast, positively skewed noise rather than as crash
+insurance, and that is enough to fix the maturities beyond 10 days, but not to bend the 2 and 3
+day smiles the way the market does. Candidates for that are a second, fast mean reverting
+variance factor (as in Christoffersen, Heston and Jacobs 2009), rough volatility, or jumps with
+separate up and down tails.
+
 ### ETH tells the same story, more strongly
 
 | | BTC | ETH |
@@ -492,25 +610,30 @@ bounds or optimizer.
 | SSVI: RMSE, inside band | 2.10, 34% | 2.62, 37% |
 | Heston: RMSE, inside band | 2.01, 20% | 3.06, 21% |
 | Heston per expiry: RMSE, range over expiries | 1.26, 0.17 to 2.55 | 1.91, 0.22 to 5.87 |
+| Bates: RMSE, inside band | 0.87, 43% | 2.27, 39% |
+| Bates: RMSE at 2.4 and 3.4 days | 1.30, 1.47 | 2.68, 6.93 |
 | Heston v0, kappa, theta, xi, rho | 0.105, 15.3, 0.185, 4.96, -0.11 | 0.137, 27.8, 0.340, 8.11, -0.10 |
-| Feller ratio | 0.23 | 0.29 |
-| ATM skew at 2.4 days, market and Heston | +0.84, -0.40 | +0.79, -0.48 |
-| ATM curvature, 2.4 over 3.4 days, market and Heston | 1.66, 1.04 | 1.53, 1.18 |
-| Curvature exponent up to 10 days, market and Heston | 1.27, 0.37 | 1.21, 0.79 |
-| Curvature exponent beyond 50 days, market and Heston | 1.06, 1.66 | 1.08, 1.80 |
+| Heston Feller ratio | 0.23 | 0.29 |
+| Bates jumps a year, mean jump, xi | 100 (cap), +2.5%, 9.2 | 87, +1.2%, 10 (cap) |
+| Skew at 2.4 days: market, Heston, Bates | +0.58, -0.34, +1.14 | +0.62, -0.38, +0.82 |
+| Curvature at 2.4 days over 3.4 days: market, Heston, Bates | 1.64, 1.11, 0.70 | 1.51, 1.26, 1.85 |
+| Bates curvature over the market's: 2.4 days, 10 to 80 days | 0.23, 0.88 to 1.10 | 1.80, 1.08 to 1.21 |
+| Curvature exponent up to 10 days: market, Heston | 1.26, 0.49 | 1.22, 0.86 |
+| Curvature exponent beyond 50 days: market, Heston | 1.06, 1.56 | 1.07, 1.73 |
 | Per expiry Heston fits with xi at its cap of 10 | 3 of 10 | 7 of 10 |
 | Mid convexity misses (executable) | 84 of 845 (0) | 71 of 703 (0) |
 | SVI arbitrage outside the quotes | 4 | 0 |
 
 ETH's calibrated Heston has more vol of vol (8.1) and faster mean reversion (27.8), so its
-curvature overshoots the market's level from 2 to 80 days (93.8 against 76.1 at 2.4 days) and
-undershoots beyond 171 days. The shape is wrong in the same way as on BTC: too flat at the short
-end (exponent 0.79 against 1.21), too steep at the long end (1.80 against 1.08), with the wrong
-sign of ATM skew up to 10 days. The 3.4 day ETH smile, which rises from 37% at the money to 93% at
-k = -0.21, defeats Heston entirely: 7.8 vol points RMSE with one parameter set, 5.9 fitted alone,
-and still 3.7 with xi allowed up to 40 (the fit goes there, with kappa = 470). The per expiry
-fits put xi at its cap on seven of ten expiries, theta at a bound on three, and v0 anywhere from
-0.04 to 2.4.
+curvature overshoots the market's from 2.4 to 80 days (up to 1.8 times between 10 and 24 days)
+and undershoots beyond 171 days. The shape is wrong in the same way as on BTC: too flat at the
+short end (exponent 0.86 against 1.22), too steep at the long end (1.73 against 1.07), with the
+wrong sign of skew up to 10 days. Bates fixes 17 to 80 days (0.6 to 0.8 vol points RMSE) but
+overshoots the 2.4 day curvature by 80%. The 3.4 day ETH smile, which rises from 37% at the money
+to 93% at k = -0.21, defeats both: 7.8 vol points RMSE for Heston with one parameter set, 5.9
+fitted alone, 3.7 with xi allowed up to 40 (the fit goes there, with kappa = 470), and 6.9 for
+Bates. The per expiry Heston fits put xi at its cap on seven of ten expiries, theta at a bound on
+three, and v0 anywhere from 0.04 to 2.4.
 
 ### The surface
 
@@ -542,13 +665,17 @@ the same folder.*
 * **OTM only.** In the money quotes inform the forward through parity but are not fitted.
 * **In sample.** Fit quality is measured on the quotes fitted. There is no test on held out
   strikes or on the next day's quotes.
-* **Calibration choices.** Heston is calibrated on first order IV errors with equal weight per
-  expiry, from multiple local starts rather than a global search, within bounds whose effect is
-  measured but not removed. Another weighting would move the single parameter compromise
-  between maturities.
-* **No jump or rough volatility model yet.** The diagnosis of jumps rests on the shape of
-  Heston's failure, not on a fitted jump model. SVI per expiry is not arbitrage free outside
-  its quotes, SSVI fits poorly, and extended SSVI is not implemented.
+* **Calibration choices.** Heston and Bates are calibrated on first order IV errors with equal
+  weight per expiry, from multiple local starts rather than a global search, within bounds whose
+  effect is measured but not removed. Another weighting would move the single parameter
+  compromise between maturities, and on ETH RMSE and the objective already rank two Bates fits
+  differently.
+* **One jump model, weakly identified.** Bates with a single lognormal jump size is the only
+  jump model tested. Its best fits sit on the intensity cap (BTC) or the vol of vol cap (ETH),
+  and BTC has a second optimum within 10% of the best, so the fit and its failures say more
+  than the parameter values. A second variance factor, rough volatility and asymmetric jumps
+  are untested. SVI per expiry is not arbitrage free outside its quotes, SSVI fits poorly, and
+  extended SSVI is not implemented.
 
 ## Reproduce
 
@@ -556,7 +683,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer. From the com
 
 ```bash
 uv sync                                    # environment from uv.lock
-uv run pytest                              # offline test suite, about a minute
+uv run pytest                              # offline test suite, about a minute and a half
 
 uv run ivcrypto build data/sample/BTC/20261005T222705Z --out results
 uv run ivcrypto report results/BTC/20261005T222705Z --out reports/sample/BTC/20261005T222705Z
@@ -564,8 +691,9 @@ uv run ivcrypto build data/sample/ETH/20261005T223117Z --out results
 uv run ivcrypto report results/ETH/20261005T223117Z --out reports/sample/ETH/20261005T223117Z
 ```
 
-`build` takes 25 to 35 s per currency, most of it fitting Heston to every expiry
-(`--no-heston-per-expiry` skips that). It writes every table as Parquet or CSV under
+`build` takes 2 to 4 minutes per currency, most of it in two diagnostics, Heston fitted to
+every expiry and the Bates variants (`--no-heston-per-expiry` and `--no-bates-variants` skip
+them; the rest takes under a minute). It writes every table as Parquet or CSV under
 `results/<CURRENCY>/<snapshot>/`, with a `manifest.json` recording the configuration, the git
 commit and the timings. `report` turns a results directory into `report.md` with light and dark
 figures; the committed reports were produced this way. Nothing is random outside the Monte Carlo
@@ -595,6 +723,7 @@ src/ivcrypto/
   svi/            raw SVI, per expiry fits, SSVI
   arbitrage.py    butterfly, calendar and raw quote checks
   heston/         characteristic function, Lewis pricer, QE Monte Carlo, calibration
+  bates/          Heston plus jumps: characteristic function, Monte Carlo, calibration, variants
   compare.py      model scores and ATM term structures
   pipeline.py     the whole analysis of a snapshot, results on disk
   plots.py        figures, light and dark
@@ -630,6 +759,7 @@ in milestones, each with its tests:
 | M5 | Static arbitrage checks, plus SSVI |
 | M6 | Heston pricing, validation and calibration, comparison with SVI |
 | M7 | CLI, figures, reports and this note |
+| M8 | Bates: pricer, validation, calibration, diagnostic refits, comparison |
 
 ## References
 
@@ -644,8 +774,13 @@ in milestones, each with its tests:
 * Black, F. (1976). The pricing of commodity contracts. Journal of Financial Economics 3.
 * Carr, P. and Madan, D. (1999). Option valuation using the fast Fourier transform. Journal of
   Computational Finance 2(4).
+* Christoffersen, P., Heston, S. and Jacobs, K. (2009). The shape and term structure of the
+  index option smirk: why multifactor stochastic volatility models work so well. Management
+  Science 55(12).
 * De Marco, S. and Martini, C. (2009). Quasi-explicit calibration of Gatheral's SVI model.
   Zeliade Systems white paper.
+* Duffie, D., Pan, J. and Singleton, K. (2000). Transform analysis and asset pricing for affine
+  jump-diffusions. Econometrica 68(6).
 * Durrleman, V. (2010). From implied to spot volatilities. Finance and Stochastics 14(2).
 * Fang, F. and Oosterlee, C. W. (2008). A novel pricing method for European options based on
   Fourier-cosine series expansions. SIAM Journal on Scientific Computing 31(2).
@@ -659,6 +794,7 @@ in milestones, each with its tests:
 * Heston, S. L. (1993). A closed-form solution for options with stochastic volatility with
   applications to bond and currency options. Review of Financial Studies 6(2).
 * Jäckel, P. (2015). Let's be rational. Wilmott 2015(75).
+* Kou, S. G. (2002). A jump-diffusion model for option pricing. Management Science 48(8).
 * Lee, R. W. (2004). The moment formula for implied volatility at extreme strikes. Mathematical
   Finance 14(3).
 * Lewis, A. L. (2000). Option Valuation under Stochastic Volatility. Finance Press.

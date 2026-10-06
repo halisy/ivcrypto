@@ -1,0 +1,11 @@
+{
+ "jsonrpc": "2.0",
+ "error": {
+  "code": -32601,
+  "message": "Method not found"
+ },
+ "testnet": false,
+ "usIn": 1791238638452756,
+ "usOut": 1791238638452830,
+ "usDiff": 74
+}

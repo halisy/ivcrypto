@@ -1,0 +1,55 @@
+# Every threshold and modeling switch, with its default value.
+#
+# Copy this file, change what you need and pass it with --config. Keys you leave out keep
+# their defaults; unknown keys are rejected so a typo cannot go unnoticed. A test checks
+# that this file matches the defaults in src/ivcrypto/config.py.
+
+[cleaning]
+# Expiries closer than this many calendar days are dropped.
+min_days_to_expiry = 2.0
+# Quotes whose (ask - bid) / mid exceeds this are dropped.
+max_relative_spread = 0.5
+# "parity": forward implied by put call parity on the option quotes themselves, falling
+# back to Deribit's underlying price when too few clean pairs exist or they disagree.
+# "underlying": Deribit's underlying_price, i.e. the expiry's future.
+forward_method = "parity"
+# Number of call/put pairs nearest the money combined into the parity forward.
+parity_pairs = 8
+# Fewer usable pairs than this triggers the fallback to the underlying price.
+parity_min_pairs = 2
+# Fallback when the pairs scatter by more than this many basis points of the forward
+# (precision weighted standard deviation of the pair forwards).
+parity_max_scatter_bps = 25.0
+
+[svi]
+# Residual weights for the per expiry raw SVI fits: "spread" divides total variance errors
+# by each quote's bid ask width (targets the inside the band measure), "vega" turns them
+# into first order price errors, "uniform" leaves them as they are.
+weighting = "spread"
+# Best points of the quasi explicit (m, sigma) grid used as starting points, plus one
+# heuristic start.
+n_starts = 8
+# Grid sizes: m over the quoted log moneyness range, sigma geometric from 0.001 to 2.
+grid_m = 21
+grid_sigma = 20
+# Expiries with fewer quotes are not fitted (SVI has five parameters).
+min_quotes = 6
+
+[heston]
+# "iv": vega weighted price errors, (model - mid) / vega, i.e. IV errors to first order.
+# "spread": the same errors divided by each quote's bid ask IV width, as for SVI.
+weighting = "iv"
+# Give every expiry the same total weight instead of every quote.
+equal_expiry_weights = true
+# Starting points (the best of a fixed grid by initial cost) refined by least squares.
+n_starts = 4
+# Function evaluation budget per start.
+max_evaluations = 400
+
+[bates]
+# Bates is calibrated on the [heston] objective (weighting and expiry weights), so the two
+# models are compared on the same terms. Starting points refined by least squares, besides
+# the calibrated Heston parameters without jumps, which are always refined.
+n_starts = 4
+# Function evaluation budget per start.
+max_evaluations = 600
